@@ -129,6 +129,7 @@ the line, [use Tendedero](https://github.com/alejandrobujan/tendedero).
 
 ## License
 
-[MIT](LICENSE) for the code, including Alejandro Buján's original work.
-Cornerstack is an independent project and is not affiliated with Tendedero.
-The Tendedero name and icon are not part of the license and are not used here.
+[MIT](LICENSE) for the code, including Alejandro Buján's original work. The
+Cornerstack and Tendedero names and icons are not covered by it, see
+[NOTICE](NOTICE.md). Cornerstack is an independent project and is not
+affiliated with Tendedero.
