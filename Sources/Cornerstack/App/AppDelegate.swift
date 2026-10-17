@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hotKey: HotKey?
     private var cancellables = Set<AnyCancellable>()
     private var mouseTimer: Timer?
+    private var sweepTimer: Timer?
 
     /// Whether the panel may be on screen: there is something to show and no
     /// full screen app in the way.
@@ -34,11 +35,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// full screen apps" off, a full screen app on that screen does: the
     /// stack waits until you leave full screen.
     private var wanted = false
-    /// Set when you open the stack on purpose, so it stays up while empty
-    /// and shows its hint.
+    /// Set while an empty stack shows its hint: on first launch, or when you
+    /// show the stack with nothing on it. It goes away by itself.
     private var keepOpen = false {
         didSet { stack.showsHint = keepOpen }
     }
+    /// Tells a hint's timer whether it is still the latest one.
+    private var hintToken = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let host = NSHostingView(rootView: StackView(stack: stack))
@@ -50,6 +53,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         restoreSettingsOnTermination()
         if Inbox.isEnabled { Inbox.apply() }
         startWatcher()
+        stack.sweepInbox()
+        sweepTimer = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stack.sweepInbox() }
+        }
         clipboardWatcher = ClipboardWatcher { [weak self] url in self?.addCapture(url) }
         if ClipboardWatcher.isEnabled { clipboardWatcher.start() }
 
@@ -97,17 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if !UserDefaults.standard.bool(forKey: "welcomed") {
             UserDefaults.standard.set(true, forKey: "welcomed")
-            keepOpen = true
-            wanted = true
-            refresh()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-                guard let self else { return }
-                self.keepOpen = false
-                if self.stack.liveCount == 0 {
-                    self.wanted = false
-                    self.refresh()
-                }
-            }
+            showHint(for: 5)
         }
     }
 
@@ -153,7 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let alert = NSAlert()
         alert.messageText = L("Let Cornerstack handle your screenshots?")
         alert.informativeText = L(
-            "Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. Drag one to a folder to keep it, or discard it with the cross. You can turn this off from the menu bar, and your settings come back when Cornerstack quits.")
+            "Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. They stay in Cornerstack's folder for 30 days after they leave the stack; drag one to a folder to keep it for good. You can turn this off from the menu bar, and your settings come back when Cornerstack quits.")
         alert.addButton(withTitle: L("Turn on"))
         alert.addButton(withTitle: L("Not now"))
         if let icon = NSImage(named: "Cornerstack") ?? NSApp.applicationIconImage { alert.icon = icon }
@@ -185,7 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Showing and hiding
 
-    /// An empty stack goes away, unless it was opened on purpose.
+    /// An empty stack goes away, unless it is showing its hint.
     private func itemsChanged() {
         guard stack.liveCount == 0, !keepOpen else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
@@ -201,7 +198,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.placeOnScreen(screen)
         wanted = true
         hiddenByUser = false
+        // Something to show now, so no hint, and the stack goes away again
+        // once it is empty.
+        keepOpen = false
         refresh()
+    }
+
+    /// An empty stack shows its hint for a moment, then goes away again.
+    private func showHint(for seconds: TimeInterval) {
+        keepOpen = true
+        wanted = true
+        refresh()
+        hintToken += 1
+        let token = hintToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            guard let self, self.hintToken == token, self.keepOpen else { return }
+            self.keepOpen = false
+            if self.stack.liveCount == 0 {
+                self.wanted = false
+                self.refresh()
+            }
+        }
     }
 
     // MARK: The capture flying to the stack
@@ -257,7 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// A discarded card falls over the whole screen, from where it sits.
+    /// A card that leaves falls over the whole screen, from where it sits.
     private func fall(_ item: Shot) {
         guard isPresent, isShown, !item.flying, let screen = panel.screen,
               let card = cardFrame(for: item.id),
@@ -322,10 +339,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         } else {
             hiddenByUser = false
-            keepOpen = true
-            wanted = true
             panel.placeOnScreen()
-            refresh()
+            if stack.liveCount == 0 {
+                showHint(for: 2.5)
+            } else {
+                wanted = true
+                refresh()
+            }
         }
     }
 

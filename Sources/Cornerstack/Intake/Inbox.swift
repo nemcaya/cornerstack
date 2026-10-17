@@ -48,6 +48,10 @@ enum Inbox {
     private static let offeredKey = "inboxOffered"
     private static let savedKey = "inboxSavedSettings"
 
+    /// How long a capture stays in the folder once it has left the stack,
+    /// before it moves to the Trash.
+    static let keepDays = 30
+
     static let folder: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Cornerstack/Screenshots", isDirectory: true)

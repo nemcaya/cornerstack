@@ -14,7 +14,7 @@
   <a href="https://github.com/Slover-69/cornerstack/releases/latest"><img src="https://img.shields.io/github/v/release/Slover-69/cornerstack" alt="Latest release"></a>
   <a href="https://github.com/Slover-69/cornerstack/actions/workflows/build.yml"><img src="https://github.com/Slover-69/cornerstack/actions/workflows/build.yml/badge.svg" alt="Build status"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-blue" alt="macOS 14 or later">
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/Slover-69/cornerstack" alt="MIT license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Slover-69/cornerstack?cacheSeconds=3600" alt="MIT license"></a>
 </p>
 
 <br>
@@ -38,17 +38,17 @@ or throw it away. Nothing times out.
 | Drag into an app | Send a copy. It leaves the stack, and the file stays on disk. |
 | Drag into a folder | Keep it there. It leaves the stack. |
 | Drag to the Trash | Move the file to the Trash. |
-| Click the cross | Remove it from the stack. Captures in Cornerstack's own folder go to the Trash. |
-| Right click | Every option, including Show in Finder. |
-| <kbd>⌃</kbd>&thinsp;<kbd>⌥</kbd>&thinsp;<kbd>T</kbd> | Show or hide the stack. |
+| Click the cross | Remove it from the stack. The file stays where it is. |
+| Right click | Every option, including Show in Finder and Move to Trash. |
+| <kbd>⌃</kbd>&thinsp;<kbd>⌥</kbd>&thinsp;<kbd>T</kbd> | Hide the stack for a while, and bring it back. |
 
 ## Details
 
 - **Fast.** A new capture flies from where you took it into the stack in a third of a second.
 - **Everywhere.** The stack shows over full screen apps. You can turn that off in the menu bar.
 - **Out of the way.** Clicks pass through everywhere except over a card, and the stack never shows up in your screenshots.
-- **Clean Desktop.** Say yes to *Handle screenshots* on first launch and captures, screen recordings included, go to a folder of their own instead of piling up on the Desktop. Your previous settings come back when you quit.
-- **Up to five.** A sixth capture pushes the oldest out of the stack. Its file stays where it is, and *Open screenshots folder* in the menu bar takes you there.
+- **Clean Desktop.** Say yes to *Handle screenshots* on first launch and captures, screen recordings included, go to a folder of their own instead of piling up on the Desktop. They stay there for 30 days after they leave the stack (*Open screenshots folder* in the menu bar), then move to the Trash. Drag one anywhere to keep it for good. Your previous settings come back when you quit.
+- **Up to five.** A sixth capture pushes the oldest out of the stack. Its file stays where it is.
 - **Copied images too.** Switch on *Add copied images* and images you copy join the stack. Only images: anything copied along with text or a file, and anything a password manager marks as private, is left alone.
 - **Private.** No account, no network, no analytics. Your screenshots never leave your Mac.
 

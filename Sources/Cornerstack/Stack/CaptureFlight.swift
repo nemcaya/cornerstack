@@ -64,7 +64,7 @@ final class CaptureFlight {
         flight.run()
     }
 
-    /// A discarded card falling off the stack, drawn over the whole screen so
+    /// A card leaving the stack falls off, drawn over the whole screen so
     /// it is never clipped by the stack panel. It drops 520 points, tilting and
     /// fading, over 0.55 s.
     static func fall(image: CGImage, card: CGRect, on screen: NSScreen) {

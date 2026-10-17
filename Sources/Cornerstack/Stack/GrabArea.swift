@@ -6,10 +6,11 @@ import SwiftUI
 ///
 /// - An app gets a copy, and the card leaves the stack (the file stays).
 /// - A folder or the Desktop keeps the file, and the card leaves the stack.
-/// - The Trash discards it.
+/// - The Trash takes the file.
 /// - Nowhere that accepts it: the card flies back to the stack.
 ///
-/// Click copies, press and hold opens Markup, the corner cross discards.
+/// Click copies, press and hold opens Markup, the corner cross takes the card
+/// off the stack.
 struct GrabArea: NSViewRepresentable {
     let item: Shot
     let stack: Stack
@@ -40,7 +41,7 @@ struct GrabArea: NSViewRepresentable {
         }
         view.onTrash = { stack.trash(id) }
         view.onDropIntoApp = { stack.drop(id) }
-        view.onDiscard = { stack.discard(id) }
+        view.onRemove = { stack.drop(id) }
         view.onLongPress = { stack.markup(id) }
         view.onPressChange = { pressed in stack.pressedID = pressed ? id : nil }
         view.menuProvider = {
@@ -50,17 +51,12 @@ struct GrabArea: NSViewRepresentable {
             // Recordings open in the trimming editor instead of Markup.
             menu.addItem(ClosureMenuItem(isRecording ? L("Trim") : L("Markup")) { stack.markup(id) })
             menu.addItem(ClosureMenuItem(L("Show in Finder")) { stack.showInFinder(id) })
-            let inInbox = stack.isInInbox(id)
-            if inInbox {
+            if stack.isInInbox(id) {
                 menu.addItem(ClosureMenuItem(L("Save to Desktop")) { stack.saveToDesktop(id) })
             }
             menu.addItem(.separator())
-            if inInbox {
-                menu.addItem(ClosureMenuItem(L("Discard")) { stack.discard(id) })
-            } else {
-                menu.addItem(ClosureMenuItem(L("Remove from stack")) { stack.discard(id) })
-                menu.addItem(ClosureMenuItem(L("Move to Trash")) { stack.trash(id) })
-            }
+            menu.addItem(ClosureMenuItem(L("Remove from stack")) { stack.drop(id) })
+            menu.addItem(ClosureMenuItem(L("Move to Trash")) { stack.trash(id) })
             return menu
         }
     }
@@ -77,7 +73,7 @@ final class GrabView: NSView, NSDraggingSource {
     var onDragEnd: () -> Void = {}
     var onTrash: () -> Void = {}
     var onDropIntoApp: () -> Void = {}
-    var onDiscard: () -> Void = {}
+    var onRemove: () -> Void = {}
     var onLongPress: () -> Void = {}
     var onPressChange: (Bool) -> Void = { _ in }
     var menuProvider: () -> NSMenu = { NSMenu() }
@@ -93,8 +89,8 @@ final class GrabView: NSView, NSDraggingSource {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    /// The discard cross drawn in the top left corner of the card. It is
-    /// handled here because this view sits on top of the SwiftUI card.
+    /// The cross drawn in the top left corner of the card. It is handled
+    /// here because this view sits on top of the SwiftUI card.
     static let crossHitSize: CGFloat = 26
 
     private func isInCross(_ event: NSEvent) -> Bool {
@@ -107,7 +103,7 @@ final class GrabView: NSView, NSDraggingSource {
     override func mouseDown(with event: NSEvent) {
         if isInCross(event) {
             downPoint = nil
-            onDiscard()
+            onRemove()
             return
         }
         if event.clickCount == 2 {

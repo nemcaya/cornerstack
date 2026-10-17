@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 (2026-10-17)
+
+- The cross only takes a capture off the stack; its file stays. Before, it moved captures in Cornerstack's own folder straight to the Trash, so *Open screenshots folder* could look empty.
+- Captures in Cornerstack's folder stay there for 30 days after they leave the stack, then move to the Trash.
+- Showing an empty stack shows its hint for a moment, then hides it again by itself.
+
 ## 1.0.0 (2026-10-17)
 
 First release, reworked from [Tendedero](https://github.com/alejandrobujan/tendedero)

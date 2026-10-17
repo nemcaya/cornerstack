@@ -21,8 +21,8 @@ struct Shot: Identifiable, Equatable {
 }
 
 /// The stack itself: what is on it and what you can do with each item.
-/// Files only move when you save, trash or discard one; otherwise the stack
-/// is just a view onto them.
+/// Files only move when you save or trash one, or when an old capture in
+/// Cornerstack's folder is swept; otherwise the stack is just a view onto them.
 @MainActor
 final class Stack: ObservableObject {
     @Published private(set) var items: [Shot] = []
@@ -101,12 +101,13 @@ final class Stack: ObservableObject {
         }
     }
 
-    /// "Clear stack": every card goes the way of its corner cross.
+    /// "Clear stack": every card leaves, like with its corner cross. The
+    /// files stay where they are.
     func clear() {
         let live = items.filter { !$0.falling }
         for (n, item) in live.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.06 * Double(n)) { [weak self] in
-                self?.discard(item.id, quietly: n > 0)
+                self?.drop(item.id, quietly: n > 0)
             }
         }
     }
@@ -164,18 +165,11 @@ final class Stack: ObservableObject {
         contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/dock/drag to trash.aif",
         byReference: true)
 
-    /// Whether the file lives in Cornerstack's own folder. Those are discarded
-    /// to the Trash, or the folder would fill up with forgotten screenshots.
-    /// Files anywhere else, like the Desktop, stay where they are.
+    /// Whether the file lives in Cornerstack's own folder rather than
+    /// somewhere you chose, like the Desktop.
     func isInInbox(_ id: UUID) -> Bool {
         guard let item = items.first(where: { $0.id == id }) else { return false }
         return item.url.standardizedFileURL.path.hasPrefix(Inbox.folder.standardizedFileURL.path + "/")
-    }
-
-    /// The corner cross, "Remove from stack", "Discard" and "Clear stack"
-    /// all end up here.
-    func discard(_ id: UUID, quietly: Bool = false) {
-        if isInInbox(id) { trash(id, quietly: quietly) } else { drop(id, quietly: quietly) }
     }
 
     /// The oldest photo leaving a full stack. Its file stays where it is.
@@ -230,6 +224,28 @@ final class Stack: ObservableObject {
     func showInFinder(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([item.url])
+    }
+
+    // MARK: Cornerstack's folder
+
+    /// Captures in Cornerstack's own folder stay there after they leave the
+    /// stack, so you can still find them. After `Inbox.keepDays` they move to
+    /// the Trash, or the folder would grow forever. Anything you want to keep
+    /// for good, drag out.
+    func sweepInbox() {
+        let fm = FileManager.default
+        let cutoff = Date().addingTimeInterval(-Double(Inbox.keepDays) * 24 * 60 * 60)
+        let onStack = Set(items.map(\.url.standardizedFileURL))
+        let keys: Set<URLResourceKey> = [.creationDateKey, .isRegularFileKey]
+        let files = (try? fm.contentsOfDirectory(
+            at: Inbox.folder, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles])) ?? []
+        var swept = 0
+        for file in files where !onStack.contains(file.standardizedFileURL) {
+            guard let values = try? file.resourceValues(forKeys: keys), values.isRegularFile == true,
+                  let created = values.creationDate, created < cutoff else { continue }
+            if (try? fm.trashItem(at: file, resultingItemURL: nil)) != nil { swept += 1 }
+        }
+        if swept > 0 { log.notice("Moved \(swept) old captures to the Trash") }
     }
 
     // MARK: Persistence

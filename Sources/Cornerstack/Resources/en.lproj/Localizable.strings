@@ -4,7 +4,7 @@
 
 /* AppDelegate */
 "Let Cornerstack handle your screenshots?" = "Let Cornerstack handle your screenshots?";
-"Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. Drag one to a folder to keep it, or discard it with the cross. You can turn this off from the menu bar, and your settings come back when Cornerstack quits." = "Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. Drag one to a folder to keep it, or discard it with the cross. You can turn this off from the menu bar, and your settings come back when Cornerstack quits.";
+"Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. They stay in Cornerstack's folder for 30 days after they leave the stack; drag one to a folder to keep it for good. You can turn this off from the menu bar, and your settings come back when Cornerstack quits." = "Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. They stay in Cornerstack's folder for 30 days after they leave the stack; drag one to a folder to keep it for good. You can turn this off from the menu bar, and your settings come back when Cornerstack quits.";
 "Turn on" = "Turn on";
 "Not now" = "Not now";
 "Cornerstack, watching the clipboard" = "Cornerstack, watching the clipboard";
@@ -30,7 +30,6 @@
 "Markup" = "Markup";
 "Show in Finder" = "Show in Finder";
 "Save to Desktop" = "Save to Desktop";
-"Discard" = "Discard";
 "Remove from stack" = "Remove from stack";
 "Move to Trash" = "Move to Trash";
 
