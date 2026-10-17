@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import os
 
-let log = Logger(subsystem: "io.github.slover69.cornerstack", category: "stack")
+let log = Logger(subsystem: "io.github.nemcaya.cornerstack", category: "stack")
 
 /// One screenshot on the stack.
 struct Shot: Identifiable, Equatable {

@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Slover-69/cornerstack/releases/latest"><img src="https://img.shields.io/github/v/release/Slover-69/cornerstack" alt="Latest release"></a>
-  <a href="https://github.com/Slover-69/cornerstack/actions/workflows/build.yml"><img src="https://github.com/Slover-69/cornerstack/actions/workflows/build.yml/badge.svg" alt="Build status"></a>
+  <a href="https://github.com/nemcaya/cornerstack/releases/latest"><img src="https://img.shields.io/github/v/release/nemcaya/cornerstack" alt="Latest release"></a>
+  <a href="https://github.com/nemcaya/cornerstack/actions/workflows/build.yml"><img src="https://github.com/nemcaya/cornerstack/actions/workflows/build.yml/badge.svg" alt="Build status"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-blue" alt="macOS 14 or later">
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/Slover-69/cornerstack?cacheSeconds=3600" alt="MIT license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/nemcaya/cornerstack?cacheSeconds=3600" alt="MIT license"></a>
 </p>
 
 <br>
@@ -54,7 +54,7 @@ or throw it away. Nothing times out.
 
 ## Install
 
-1. Download the `.dmg` from the [latest release](https://github.com/Slover-69/cornerstack/releases/latest), open it and drag Cornerstack to Applications.
+1. Download the `.dmg` from the [latest release](https://github.com/nemcaya/cornerstack/releases/latest), open it and drag Cornerstack to Applications.
 2. Open Cornerstack. It's free and open source but not notarized by Apple, so macOS says *"Cornerstack" Not Opened*. Click **Done**.
 3. Open **System Settings › Privacy & Security**, scroll down to **Security** and click **Open Anyway** next to Cornerstack. Confirm with your password or Touch ID. You only do this once per version.
 
@@ -69,7 +69,7 @@ Rather not run a downloaded binary at all? [Build it yourself](#build-from-sourc
 ## Build from source
 
 ```sh
-git clone https://github.com/Slover-69/cornerstack.git
+git clone https://github.com/nemcaya/cornerstack.git
 cd cornerstack
 scripts/build-app.sh
 open build/Cornerstack.app

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2 (2026-10-17)
+
+- New home: github.com/nemcaya/cornerstack. The app ID is now `io.github.nemcaya.cornerstack`, so this version starts with fresh settings. Quit the previous version from its menu bar icon first, so it puts your screenshot settings back.
+
 ## 1.0.1 (2026-10-17)
 
 - The cross only takes a capture off the stack; its file stays. Before, it moved captures in Cornerstack's own folder straight to the Trash, so *Open screenshots folder* could look empty.
