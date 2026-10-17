@@ -1,0 +1,19 @@
+name: Idea
+description: Something you'd like Cornerstack to do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: Cornerstack tries to stay small. Starting from the problem makes it easier to see whether an idea fits.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation where Cornerstack falls short today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: How you imagine it working.

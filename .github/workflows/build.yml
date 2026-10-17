@@ -1,0 +1,19 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the app
+        run: scripts/build-app.sh release
+      - name: Check the strings
+        run: swift scripts/check-strings.swift

@@ -1,0 +1,41 @@
+/* English. Each key is the English text exactly as written in L("...") in
+   the code. To add a language, copy this folder to <language>.lproj and
+   translate the values; swift scripts/check-strings.swift checks them all. */
+
+/* AppDelegate */
+"Let Cornerstack handle your screenshots?" = "Let Cornerstack handle your screenshots?";
+"Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. Drag one to a folder to keep it, or discard it with the cross. You can turn this off from the menu bar, and your settings come back when Cornerstack quits." = "Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. Drag one to a folder to keep it, or discard it with the cross. You can turn this off from the menu bar, and your settings come back when Cornerstack quits.";
+"Turn on" = "Turn on";
+"Not now" = "Not now";
+"Cornerstack, watching the clipboard" = "Cornerstack, watching the clipboard";
+"Hide stack" = "Hide stack";
+"Show stack" = "Show stack";
+"Clear stack" = "Clear stack";
+"Handle screenshots" = "Handle screenshots";
+"Screenshots appear instantly and skip the Desktop" = "Screenshots appear instantly and skip the Desktop";
+"Add copied images" = "Add copied images";
+"Images you copy join the stack too" = "Images you copy join the stack too";
+"Over full screen apps" = "Over full screen apps";
+"Open screenshots folder" = "Open screenshots folder";
+"Sounds" = "Sounds";
+"Open at login" = "Open at login";
+"Quit Cornerstack" = "Quit Cornerstack";
+"Could not change the login setting" = "Could not change the login setting";
+"Move Cornerstack to the Applications folder and try again." = "Move Cornerstack to the Applications folder and try again.";
+
+/* GrabArea */
+"Copy" = "Copy";
+"Open" = "Open";
+"Trim" = "Trim";
+"Markup" = "Markup";
+"Show in Finder" = "Show in Finder";
+"Save to Desktop" = "Save to Desktop";
+"Discard" = "Discard";
+"Remove from stack" = "Remove from stack";
+"Move to Trash" = "Move to Trash";
+
+/* ShotView */
+"Copied" = "Copied";
+
+/* StackView */
+"Take a screenshot and it will land here" = "Take a screenshot and it will land here";
