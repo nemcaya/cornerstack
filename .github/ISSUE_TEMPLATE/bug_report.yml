@@ -28,12 +28,12 @@ body:
     attributes:
       label: Cornerstack version
       description: The release you installed, or the commit if you built it from source.
-      placeholder: "1.0.0"
+      placeholder: "1.1.0"
   - type: dropdown
     id: handle
     attributes:
       label: Is "Handle screenshots" on?
-      description: In the menu bar menu. It changes where macOS saves screenshots.
+      description: In Settings. It changes where macOS saves screenshots.
       options:
         - "Yes"
         - "No"

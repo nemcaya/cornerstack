@@ -4,13 +4,15 @@ import SwiftUI
 /// Bridges each card to AppKit's drag and drop, so it can be dragged into
 /// any app as a real file. Each destination means one thing:
 ///
-/// - An app gets a copy, and the card leaves the stack (the file stays).
+/// - An app gets a copy, and the card leaves the stack unless it is kept
+///   (the file stays).
 /// - A folder or the Desktop keeps the file, and the card leaves the stack.
 /// - The Trash takes the file.
 /// - Nowhere that accepts it: the card flies back to the stack.
 ///
-/// Click copies, press and hold opens Markup, the corner cross takes the card
-/// off the stack.
+/// Click copies, Option-click copies the path, press and hold opens Markup,
+/// a force click opens Quick Look. The cross in the top left corner takes the
+/// card off the stack; the pin in the top right keeps it there.
 struct GrabArea: NSViewRepresentable {
     let item: Shot
     let stack: Stack
@@ -31,8 +33,12 @@ struct GrabArea: NSViewRepresentable {
         let isRecording = item.isRecording
         view.url = item.url
         view.dragImage = item.thumb
+        view.kept = item.kept
+        let kept = item.kept
         view.onClick = { stack.copy(id) }
+        view.onOptionClick = { stack.copyPath(id) }
         view.onDoubleClick = { stack.open(id) }
+        view.onForceClick = { stack.quickLook(id) }
         view.onDragStart = { stack.draggingID = id }
         view.onDragEnd = {
             stack.draggingID = nil
@@ -40,14 +46,21 @@ struct GrabArea: NSViewRepresentable {
             stack.prune()
         }
         view.onTrash = { stack.trash(id) }
-        view.onDropIntoApp = { stack.drop(id) }
+        view.onDropIntoApp = { stack.dropUnlessKept(id) }
         view.onRemove = { stack.drop(id) }
+        view.onTogglePin = { stack.toggleKeep(id) }
         view.onLongPress = { stack.markup(id) }
         view.onPressChange = { pressed in stack.pressedID = pressed ? id : nil }
         view.menuProvider = {
             let menu = NSMenu()
             menu.addItem(ClosureMenuItem(L("Copy")) { stack.copy(id) })
+            if !isRecording {
+                menu.addItem(ClosureMenuItem(L("Copy Text")) { stack.copyText(id) })
+            }
+            menu.addItem(ClosureMenuItem(L("Copy Path")) { stack.copyPath(id) })
+            menu.addItem(.separator())
             menu.addItem(ClosureMenuItem(L("Open")) { stack.open(id) })
+            menu.addItem(ClosureMenuItem(L("Quick Look")) { stack.quickLook(id) })
             // Recordings open in the trimming editor instead of Markup.
             menu.addItem(ClosureMenuItem(isRecording ? L("Trim") : L("Markup")) { stack.markup(id) })
             menu.addItem(ClosureMenuItem(L("Show in Finder")) { stack.showInFinder(id) })
@@ -55,6 +68,9 @@ struct GrabArea: NSViewRepresentable {
                 menu.addItem(ClosureMenuItem(L("Save to Desktop")) { stack.saveToDesktop(id) })
             }
             menu.addItem(.separator())
+            let keep = ClosureMenuItem(L("Keep on stack")) { stack.toggleKeep(id) }
+            keep.state = kept ? .on : .off
+            menu.addItem(keep)
             menu.addItem(ClosureMenuItem(L("Remove from stack")) { stack.drop(id) })
             menu.addItem(ClosureMenuItem(L("Move to Trash")) { stack.trash(id) })
             return menu
@@ -67,13 +83,18 @@ final class GrabView: NSView, NSDraggingSource {
 
     var url: URL?
     var dragImage: NSImage?
+    /// A kept card has no cross: its top left corner doesn't remove it.
+    var kept = false
     var onClick: () -> Void = {}
+    var onOptionClick: () -> Void = {}
     var onDoubleClick: () -> Void = {}
+    var onForceClick: () -> Void = {}
     var onDragStart: () -> Void = {}
     var onDragEnd: () -> Void = {}
     var onTrash: () -> Void = {}
     var onDropIntoApp: () -> Void = {}
     var onRemove: () -> Void = {}
+    var onTogglePin: () -> Void = {}
     var onLongPress: () -> Void = {}
     var onPressChange: (Bool) -> Void = { _ in }
     var menuProvider: () -> NSMenu = { NSMenu() }
@@ -89,22 +110,33 @@ final class GrabView: NSView, NSDraggingSource {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    /// The cross drawn in the top left corner of the card. It is handled
-    /// here because this view sits on top of the SwiftUI card.
-    static let crossHitSize: CGFloat = 26
+    /// The cross and the pin drawn in the top corners of the card. They are
+    /// handled here because this view sits on top of the SwiftUI card.
+    static let cornerHitSize: CGFloat = 26
 
-    private func isInCross(_ event: NSEvent) -> Bool {
+    private enum Corner { case left, right }
+
+    private func corner(of event: NSEvent) -> Corner? {
         let p = convert(event.locationInWindow, from: nil)
-        let corner = NSRect(x: 0, y: isFlipped ? 0 : bounds.height - Self.crossHitSize,
-                            width: Self.crossHitSize, height: Self.crossHitSize)
-        return corner.contains(p)
+        let y = isFlipped ? 0 : bounds.height - Self.cornerHitSize
+        let size = Self.cornerHitSize
+        if NSRect(x: 0, y: y, width: size, height: size).contains(p) { return .left }
+        if NSRect(x: bounds.width - size, y: y, width: size, height: size).contains(p) { return .right }
+        return nil
     }
 
     override func mouseDown(with event: NSEvent) {
-        if isInCross(event) {
+        switch corner(of: event) {
+        case .left? where !kept:
             downPoint = nil
             onRemove()
             return
+        case .right?:
+            downPoint = nil
+            onTogglePin()
+            return
+        default:
+            break
         }
         if event.clickCount == 2 {
             downPoint = nil
@@ -124,6 +156,15 @@ final class GrabView: NSView, NSDraggingSource {
                 self.onLongPress()
             }
         }
+    }
+
+    /// A force click on a trackpad opens Quick Look, as it does in Finder.
+    /// It counts instead of the click and of a long press.
+    override func pressureChange(with event: NSEvent) {
+        guard event.stage == 2, downPoint != nil, !startedDrag, !didLongPress else { return }
+        didLongPress = true
+        endPress()
+        onForceClick()
     }
 
     private func endPress() {
@@ -150,7 +191,9 @@ final class GrabView: NSView, NSDraggingSource {
 
     override func mouseUp(with event: NSEvent) {
         endPress()
-        if downPoint != nil && !startedDrag && !didLongPress && event.clickCount == 1 { onClick() }
+        if downPoint != nil && !startedDrag && !didLongPress && event.clickCount == 1 {
+            if event.modifierFlags.contains(.option) { onOptionClick() } else { onClick() }
+        }
         downPoint = nil
         didLongPress = false
     }

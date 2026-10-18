@@ -4,37 +4,73 @@
 
 /* AppDelegate */
 "Let Cornerstack handle your screenshots?" = "Let Cornerstack handle your screenshots?";
-"Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. They stay in Cornerstack's folder for 30 days after they leave the stack; drag one to a folder to keep it for good. You can turn this off from the menu bar, and your settings come back when Cornerstack quits." = "Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. They stay in Cornerstack's folder for 30 days after they leave the stack; drag one to a folder to keep it for good. You can turn this off from the menu bar, and your settings come back when Cornerstack quits.";
+"Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. They stay in Cornerstack's folder for 30 days after they leave the stack; drag one to a folder to keep it for good. You can turn this off in Settings, and your screenshot settings come back when Cornerstack quits." = "Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. They stay in Cornerstack's folder for 30 days after they leave the stack; drag one to a folder to keep it for good. You can turn this off in Settings, and your screenshot settings come back when Cornerstack quits.";
 "Turn on" = "Turn on";
 "Not now" = "Not now";
 "Cornerstack, watching the clipboard" = "Cornerstack, watching the clipboard";
 "Hide stack" = "Hide stack";
 "Show stack" = "Show stack";
+"Copy newest" = "Copy newest";
+"Put back last card" = "Put back last card";
 "Clear stack" = "Clear stack";
-"Handle screenshots" = "Handle screenshots";
-"Screenshots appear instantly and skip the Desktop" = "Screenshots appear instantly and skip the Desktop";
-"Add copied images" = "Add copied images";
-"Images you copy join the stack too" = "Images you copy join the stack too";
-"Over full screen apps" = "Over full screen apps";
 "Open screenshots folder" = "Open screenshots folder";
-"Sounds" = "Sounds";
-"Open at login" = "Open at login";
+"Settings…" = "Settings…";
 "Quit Cornerstack" = "Quit Cornerstack";
 "Could not change the login setting" = "Could not change the login setting";
 "Move Cornerstack to the Applications folder and try again." = "Move Cornerstack to the Applications folder and try again.";
 
+/* Settings */
+"Cards" = "Cards";
+"Size" = "Size";
+"Automatic" = "Automatic";
+"Custom" = "Custom";
+"Preset" = "Preset";
+"Width" = "Width";
+"Handle screenshots" = "Handle screenshots";
+"Add copied images" = "Add copied images";
+"Show over full screen apps" = "Show over full screen apps";
+"Screenshots" = "Screenshots";
+"Handled screenshots skip the Desktop and stay in Cornerstack's folder for 30 days after they leave the stack." = "Handled screenshots skip the Desktop and stay in Cornerstack's folder for 30 days after they leave the stack.";
+"General" = "General";
+"Sounds" = "Sounds";
+"Open at login" = "Open at login";
+"Shortcuts" = "Shortcuts";
+"Press keys…" = "Press keys…";
+"None" = "None";
+"Click a shortcut, then press the new keys. Escape keeps it, Delete turns it off." = "Click a shortcut, then press the new keys. Escape keeps it, Delete turns it off.";
+"Add ⌥ or ⌃" = "Add ⌥ or ⌃";
+"Already in use" = "Already in use";
+"Not available" = "Not available";
+"Cornerstack Settings" = "Cornerstack Settings";
+
 /* GrabArea */
 "Copy" = "Copy";
+"Copy Text" = "Copy Text";
+"Copy Path" = "Copy Path";
 "Open" = "Open";
+"Quick Look" = "Quick Look";
 "Trim" = "Trim";
 "Markup" = "Markup";
 "Show in Finder" = "Show in Finder";
 "Save to Desktop" = "Save to Desktop";
+"Keep on stack" = "Keep on stack";
 "Remove from stack" = "Remove from stack";
 "Move to Trash" = "Move to Trash";
 
-/* ShotView */
+/* Layout */
+"Small" = "Small";
+"Medium" = "Medium";
+"Large" = "Large";
+
+/* Stack */
 "Copied" = "Copied";
+"No text found" = "No text found";
+"Copied text" = "Copied text";
+"Copied path" = "Copied path";
+
+/* Shortcuts */
+"Copy newest card" = "Copy newest card";
+"Show or hide the stack" = "Show or hide the stack";
 
 /* StackView */
 "Take a screenshot and it will land here" = "Take a screenshot and it will land here";

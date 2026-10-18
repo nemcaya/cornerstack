@@ -1,6 +1,6 @@
 import AppKit
-import Carbon
 import Combine
+import Quartz
 import ServiceManagement
 import SwiftUI
 
@@ -16,10 +16,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var safetyWatcher: ScreenshotWatcher?
     private var clipboardWatcher: ClipboardWatcher!
     private var signalSources: [DispatchSourceSignal] = []
-    private var hotKey: HotKey?
+    private var hotKeys: [HotKey] = []
+    private let settingsWindow = SettingsWindow()
+    private lazy var settings = SettingsModel(actions: .init(
+        applyCardWidth: { [weak self] fitting in self?.placePanel(on: self?.panel.screen, fitting: fitting) },
+        automaticWidth: { [weak self] in
+            CardWidth.automatic(for: (self?.panel.screen ?? StackPanel.screenUnderPointer())?.visibleFrame ?? .zero)
+        },
+        setInbox: { [weak self] on in self?.setInbox(on) },
+        setClipboard: { [weak self] on in self?.setClipboard(on) },
+        setOverFullScreen: { [weak self] on in
+            FullScreen.showOverFullScreen = on
+            self?.refresh()
+        },
+        setSounds: { [weak self] on in self?.stack.soundOn = on },
+        setOpenAtLogin: { on in AppDelegate.setOpenAtLogin(on) },
+        registerShortcuts: { [weak self] paused in self?.registerShortcuts(paused: paused) ?? [] }
+    ))
     private var cancellables = Set<AnyCancellable>()
-    private var mouseTimer: Timer?
-    private var sweepTimer: Timer?
+    /// Report pointer moves while the stack shows; see `startMouseTracking`.
+    private var mouseMonitors: [Any] = []
+    private var activeTimer: Timer?
+    /// New captures are decoded here, one at a time, so they land in the
+    /// order they were taken.
+    private let decoder = DispatchQueue(label: "io.github.nemcaya.cornerstack.decode", qos: .userInitiated)
 
     /// Whether the panel may be on screen: there is something to show and no
     /// full screen app in the way.
@@ -31,9 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// stays hidden until you show it again or take a new screenshot.
     private var hiddenByUser = false
     private var staleStateSince: Date?
-    /// Whether the stack should be up, if nothing prevents it. With "Over
-    /// full screen apps" off, a full screen app on that screen does: the
-    /// stack waits until you leave full screen.
+    /// Whether the stack should be up, if nothing prevents it. With "Show
+    /// over full screen apps" off, a full screen app on that screen does:
+    /// the stack waits until you leave full screen.
     private var wanted = false
     /// Set while an empty stack shows its hint: on first launch, or when you
     /// show the stack with nothing on it. It goes away by itself.
@@ -47,22 +67,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let host = NSHostingView(rootView: StackView(stack: stack))
         host.sizingOptions = []
         panel = StackPanel(content: host)
-        panel.placeOnScreen()
+        panel.onPointerMove = { [weak self] in self?.pointerMoved() }
+        stack.onLayout = { [weak self] in self?.updateMousePassThrough() }
+        placePanel()
 
         // Ready to put the screenshot settings back before changing them.
         restoreSettingsOnTermination()
         if Inbox.isEnabled { Inbox.apply() }
         startWatcher()
         stack.sweepInbox()
-        sweepTimer = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { [weak self] _ in
+        let sweep = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.stack.sweepInbox() }
         }
+        // No hurry: macOS may run it along with other work instead of waking up for it.
+        sweep.tolerance = 10 * 60
         clipboardWatcher = ClipboardWatcher { [weak self] url in self?.addCapture(url) }
         if ClipboardWatcher.isEnabled { clipboardWatcher.start() }
 
-        hotKey = HotKey(keyCode: kVK_ANSI_T, modifiers: controlKey | optionKey) { [weak self] in
-            self?.toggle()
-        }
+        registerShortcuts()
 
         setUpStatusItem()
 
@@ -74,6 +96,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.itemsChanged() }
             .store(in: &cancellables)
+        // A drag can end without moving a card, with the pointer resting
+        // wherever it let go.
+        stack.$draggingID
+            .receive(on: RunLoop.main)
+            .sink { [weak self] id in if id == nil { self?.updateMousePassThrough() } }
+            .store(in: &cancellables)
+        for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateActiveTimer() }
+            }
+        }
         // Screenshots kept from last time come back, and stay.
         if stack.liveCount > 0 { showStack(on: nil) }
 
@@ -94,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 // Stay on the same screen if it is still connected.
-                self?.panel.placeOnScreen(self?.panel.screen)
+                self?.placePanel(on: self?.panel.screen)
             }
         }
 
@@ -106,6 +139,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             UserDefaults.standard.set(true, forKey: "welcomed")
             showHint(for: 5)
         }
+    }
+
+    /// Opening the app again, from Finder or Spotlight, opens Settings: the
+    /// usual way to reach a menu bar app's settings.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openSettings()
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -150,7 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let alert = NSAlert()
         alert.messageText = L("Let Cornerstack handle your screenshots?")
         alert.informativeText = L(
-            "Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. They stay in Cornerstack's folder for 30 days after they leave the stack; drag one to a folder to keep it for good. You can turn this off from the menu bar, and your settings come back when Cornerstack quits.")
+            "Screenshots will land on the stack the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. They stay in Cornerstack's folder for 30 days after they leave the stack; drag one to a folder to keep it for good. You can turn this off in Settings, and your screenshot settings come back when Cornerstack quits.")
         alert.addButton(withTitle: L("Turn on"))
         alert.addButton(withTitle: L("Not now"))
         if let icon = NSImage(named: "Cornerstack") ?? NSApp.applicationIconImage { alert.icon = icon }
@@ -158,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if alert.runModal() == .alertFirstButtonReturn { setInbox(true) }
     }
 
-    /// Watching the clipboard is opt in, from the menu bar only.
+    /// Watching the clipboard is opt in, from Settings only.
     private func setClipboard(_ on: Bool) {
         ClipboardWatcher.isEnabled = on
         if on { clipboardWatcher.start() } else { clipboardWatcher.stop() }
@@ -195,7 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The stack shows on that screen and stays. Without a screen, it uses
     /// the one under the pointer.
     private func showStack(on screen: NSScreen?) {
-        panel.placeOnScreen(screen)
+        placePanel(on: screen)
         wanted = true
         hiddenByUser = false
         // Something to show now, so no hint, and the stack goes away again
@@ -221,57 +261,129 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// Puts the panel on that screen, or the one under the pointer, as wide
+    /// as the cards need. The oldest cards leave if they no longer fit,
+    /// unless `fitting` is false: while the width slider moves, they wait
+    /// until it is let go.
+    private func placePanel(on screen: NSScreen? = nil, fitting: Bool = true) {
+        guard let screen = screen ?? StackPanel.screenUnderPointer() else { return }
+        stack.cardWidth = CardWidth.custom ?? CardWidth.automatic(for: screen.visibleFrame)
+        panel.placeOnScreen(screen, width: Layout.panelWidth(stack.cardWidth))
+        stack.capacity = Layout.capacity(cardWidth: stack.cardWidth, height: panel.frame.height)
+        if fitting { stack.trimToCapacity() }
+        // The panel may have moved under a resting pointer.
+        updateMousePassThrough()
+    }
+
+    private func openSettings() {
+        settings.reload(soundsOn: stack.soundOn)
+        settingsWindow.show(settings)
+    }
+
+    /// Takes the shortcuts set in Settings, the standard ones until then.
+    /// While Settings takes a new one, it lets go of them all. Returns the
+    /// actions whose shortcut macOS refused.
+    @discardableResult
+    private func registerShortcuts(paused: Bool = false) -> Set<ShortcutAction> {
+        hotKeys = []
+        guard !paused else { return [] }
+        var refused = Set<ShortcutAction>()
+        for action in ShortcutAction.allCases {
+            guard let shortcut = action.shortcut else { continue }
+            let run: () -> Void = { [weak self] in
+                switch action {
+                case .copyNewest: self?.copyNewest()
+                case .toggleStack: self?.toggle()
+                }
+            }
+            if let hotKey = HotKey(shortcut, action: run) {
+                hotKeys.append(hotKey)
+            } else {
+                refused.insert(action)
+            }
+        }
+        return refused
+    }
+
+    /// The newest card goes to the clipboard, like a click on it.
+    private func copyNewest() {
+        guard let newest = stack.items.last(where: { !$0.falling }) else {
+            NSSound.beep()
+            return
+        }
+        stack.copy(newest.id)
+    }
+
+    /// The card that left most recently comes back, flying in from where it
+    /// was taken.
+    private func putBack() {
+        guard let url = stack.takeBackLastRemoved() else {
+            NSSound.beep()
+            return
+        }
+        addCapture(url)
+    }
+
     // MARK: The capture flying to the stack
 
     /// A new screenshot lifts off from where it was taken and flies to its
     /// place on the stack. Without a known capture area it simply drops in.
     private func addCapture(_ url: URL) {
         let from = captureRect(of: url)
-        let screen = from.flatMap { from in
-            NSScreen.screens.first { NSMouseInRect(CGPoint(x: from.midX, y: from.midY), $0.frame, false) }
+        // The flight starts out at the captured size, so it needs a sharper
+        // image than the card, up to a limit: a full Retina screen would
+        // otherwise be decoded at full resolution.
+        let scale = from.flatMap(screen(containing:))?.backingScaleFactor ?? 2
+        let flightPixels = from.map { Int(max($0.width, $0.height) * scale).clamped(to: 400...1500) }
+        // A big screenshot takes a moment to decode, so that happens off the
+        // main thread, once for both the card and its flight.
+        decoder.async {
+            let images = loadCapture(url, flightPixels: flightPixels)
+            DispatchQueue.main.async { [weak self] in
+                if let images { self?.land(url, images: images, from: from) }
+            }
         }
+    }
+
+    private func land(_ url: URL, images: CaptureImages, from: CGRect?) {
         // Every capture shows the stack before it lands, on the screen it was
         // taken on. On a full stack the oldest card then falls in view as the
         // new one flies in.
-        showStack(on: screen)
-        guard let id = stack.add(url, flying: from != nil) else {
+        showStack(on: from.flatMap(screen(containing:)))
+        guard let id = stack.add(url, thumb: images.card, flying: images.flight != nil) else {
             // Nothing was added after all, so an empty stack goes away again.
             itemsChanged()
             return
         }
-        guard let from else { return }
+        guard let from, let image = images.flight else { return }
         // Let the stack appear and lay out before measuring the landing spot.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
-            self?.fly(id, from: from)
+            self?.fly(id, image: image, from: from)
         }
     }
 
-    private func fly(_ id: UUID, from: CGRect, retries: Int = 3) {
+    private func fly(_ id: UUID, image: CGImage, from: CGRect, retries: Int = 3) {
         // The landing spot comes from the laid out card, which can take a
         // frame or two to report itself.
         if cardFrame(for: id) == nil, retries > 0, isPresent, isShown {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
-                self?.fly(id, from: from, retries: retries - 1)
+                self?.fly(id, image: image, from: from, retries: retries - 1)
             }
             return
         }
         guard isPresent, isShown, CaptureFlight.flightsInProgress < 2, let screen = panel.screen,
-              let to = cardFrame(for: id),
-              let item = stack.items.first(where: { $0.id == id }) else {
-            stack.land(id)
-            return
-        }
-        // Sharp enough while it starts out at the captured size, which a
-        // full Retina screen would otherwise take at full resolution.
-        let pixels = Int(max(from.width, from.height) * screen.backingScaleFactor)
-        guard let image = makeThumbnail(item.url, maxPixels: min(1500, max(400, pixels)))?
-            .cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+              let to = cardFrame(for: id) else {
             stack.land(id)
             return
         }
         CaptureFlight.fly(image: image, from: from, to: to, on: screen) { [weak self] in
             self?.stack.land(id)
         }
+    }
+
+    /// The screen a capture was taken on.
+    private func screen(containing rect: CGRect) -> NSScreen? {
+        NSScreen.screens.first { NSMouseInRect(CGPoint(x: rect.midX, y: rect.midY), $0.frame, false) }
     }
 
     /// A card that leaves falls over the whole screen, from where it sits.
@@ -339,7 +451,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         } else {
             hiddenByUser = false
-            panel.placeOnScreen()
+            placePanel()
             if stack.liveCount == 0 {
                 showHint(for: 2.5)
             } else {
@@ -349,29 +461,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // MARK: Following the pointer
+
+    /// While the stack shows, it follows the pointer to know when to catch
+    /// clicks. Moves over other apps reach a global monitor, which needs no
+    /// permission for the mouse, moves sent to Cornerstack reach a local one,
+    /// and the panel reports moves over itself. Nothing runs while the
+    /// pointer rests.
     private func startMouseTracking() {
-        guard mouseTimer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tick() }
+        guard mouseMonitors.isEmpty else { return }
+        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseUp]
+        let global = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pointerMoved() }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        mouseTimer = timer
+        let local = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            MainActor.assumeIsolated { self?.pointerMoved() }
+            return event
+        }
+        mouseMonitors = [global, local].compactMap { $0 }
+        updateActiveTimer()
+        updateMousePassThrough()
     }
 
     private func stopMouseTracking() {
-        mouseTimer?.invalidate()
-        mouseTimer = nil
+        mouseMonitors.forEach(NSEvent.removeMonitor)
+        mouseMonitors = []
+        updateActiveTimer()
         panel.ignoresMouseEvents = true
     }
 
-    private func tick() {
-        let mouse = NSEvent.mouseLocation
-        let now = Date()
+    /// While Cornerstack itself is the active app, with Settings, Quick Look
+    /// or Markup open, macOS may send it the pointer's moves without passing
+    /// them on. Then it checks the pointer 30 times a second instead, until
+    /// another app is active again.
+    private func updateActiveTimer() {
+        let wanted = isShown && NSApp.isActive
+        if wanted && activeTimer == nil {
+            let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.pointerMoved() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            activeTimer = timer
+        } else if !wanted {
+            activeTimer?.invalidate()
+            activeTimer = nil
+        }
+    }
 
+    private func pointerMoved() {
         // A drag or press that never reported its end freezes the stack: the
         // panel stops switching between catching clicks and letting them
         // through. With no button down, let go of it after a short grace period.
         if (GrabView.isDragging || stack.pressedID != nil) && NSEvent.pressedMouseButtons == 0 {
+            let now = Date()
             let since = staleStateSince ?? now
             staleStateSince = since
             if now.timeIntervalSince(since) > 1.5 {
@@ -383,18 +525,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             staleStateSince = nil
         }
-
-        // All the stack needs to know is whether the pointer is over a card.
-        guard isShown else { return }
-        updateMousePassThrough(mouse)
+        updateMousePassThrough()
     }
 
     /// The panel is a tall column, so it only accepts the mouse while the
     /// cursor is over a card. Everywhere else, clicks go to whatever is
-    /// underneath.
-    private func updateMousePassThrough(_ mouse: NSPoint) {
-        guard !GrabView.isDragging else { return }
-        let local = panel.convertPoint(fromScreen: mouse)
+    /// underneath. Also called when something changes under a resting
+    /// pointer: the cards move, a drag ends or the panel moves.
+    private func updateMousePassThrough() {
+        guard isShown, !GrabView.isDragging else { return }
+        let local = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
         let flipped = CGPoint(x: local.x, y: panel.frame.height - local.y)
         let overCard = stack.hitRects.values.contains { $0.insetBy(dx: -4, dy: -4).contains(flipped) }
         if panel.ignoresMouseEvents == overCard {
@@ -408,6 +548,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         updateStatusIcon()
         let menu = NSMenu()
+        // Each item is enabled or not as menuNeedsUpdate decides, not by
+        // AppKit's own checks, which would enable every one of them.
+        menu.autoenablesItems = false
         menu.delegate = self
         statusItem.menu = menu
     }
@@ -429,76 +572,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let toggleItem = ClosureMenuItem(isShown ? L("Hide stack") : L("Show stack")) { [weak self] in
             self?.toggle()
         }
-        toggleItem.keyEquivalent = "t"
-        toggleItem.keyEquivalentModifierMask = [.control, .option]
+        ShortcutAction.toggleStack.shortcut?.show(in: toggleItem)
         menu.addItem(toggleItem)
+
+        let copyItem = ClosureMenuItem(L("Copy newest")) { [weak self] in
+            self?.copyNewest()
+        }
+        ShortcutAction.copyNewest.shortcut?.show(in: copyItem)
+        copyItem.isEnabled = stack.liveCount > 0
+        menu.addItem(copyItem)
+
+        let putBackItem = ClosureMenuItem(L("Put back last card")) { [weak self] in
+            self?.putBack()
+        }
+        putBackItem.isEnabled = stack.canPutBack
+        menu.addItem(putBackItem)
 
         let clearItem = ClosureMenuItem(L("Clear stack")) { [weak self] in
             self?.stack.clear()
         }
-        clearItem.isEnabled = stack.liveCount > 0
+        clearItem.isEnabled = stack.items.contains { !$0.falling && !$0.kept }
         menu.addItem(clearItem)
 
-        let inbox = ClosureMenuItem(L("Handle screenshots")) { [weak self] in
-            self?.setInbox(!Inbox.isEnabled)
-        }
-        inbox.state = Inbox.isEnabled ? .on : .off
-        inbox.toolTip = L("Screenshots appear instantly and skip the Desktop")
-        menu.addItem(inbox)
-
-        let clipboard = ClosureMenuItem(L("Add copied images")) { [weak self] in
-            self?.setClipboard(!ClipboardWatcher.isEnabled)
-        }
-        clipboard.state = ClipboardWatcher.isEnabled ? .on : .off
-        clipboard.toolTip = L("Images you copy join the stack too")
-        menu.addItem(clipboard)
-
-        let fullScreen = ClosureMenuItem(L("Over full screen apps")) { [weak self] in
-            FullScreen.showOverFullScreen.toggle()
-            self?.refresh()
-        }
-        fullScreen.state = FullScreen.showOverFullScreen ? .on : .off
-        menu.addItem(fullScreen)
+        menu.addItem(.separator())
 
         menu.addItem(ClosureMenuItem(L("Open screenshots folder")) { [weak self] in
             guard let self else { return }
             NSWorkspace.shared.open(self.watcher.folder)
         })
+        menu.addItem(ClosureMenuItem(L("Settings…"), key: ",") { [weak self] in
+            self?.openSettings()
+        })
 
         menu.addItem(.separator())
 
-        let sound = ClosureMenuItem(L("Sounds")) { [weak self] in
-            guard let self else { return }
-            self.stack.soundOn.toggle()
-        }
-        sound.state = stack.soundOn ? .on : .off
-        menu.addItem(sound)
-
-        let login = ClosureMenuItem(L("Open at login")) {
-            AppDelegate.toggleLaunchAtLogin()
-        }
-        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        menu.addItem(login)
-
-        menu.addItem(.separator())
         menu.addItem(ClosureMenuItem(L("Quit Cornerstack"), key: "q") {
             NSApp.terminate(nil)
         })
     }
 
-    private static func toggleLaunchAtLogin() {
+    /// Returns false, after saying why, when macOS refuses the change.
+    private static func setOpenAtLogin(_ on: Bool) -> Bool {
         do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-            } else {
+            if on {
                 try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
             }
+            return true
         } catch {
             let alert = NSAlert()
             alert.messageText = L("Could not change the login setting")
             alert.informativeText = L("Move Cornerstack to the Applications folder and try again.")
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
+            return false
         }
+    }
+
+    // MARK: Quick Look
+
+    /// Quick Look looks for its controller along the responder chain; with no
+    /// window of ours, that is the app delegate, which hands it on.
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
+
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        QuickLook.shared.take(panel)
+    }
+
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        QuickLook.shared.release(panel)
     }
 }

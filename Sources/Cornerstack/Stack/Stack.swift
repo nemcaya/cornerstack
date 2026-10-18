@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import os
+import UniformTypeIdentifiers
 
 let log = Logger(subsystem: "io.github.nemcaya.cornerstack", category: "stack")
 
@@ -12,12 +13,23 @@ struct Shot: Identifiable, Equatable {
     var falling = false
     /// Still flying in from where it was captured; the card waits hidden.
     var flying = false
+    /// Kept on the stack: a drop into an app leaves it there, and new
+    /// captures push other cards out first.
+    var kept = false
     /// A screen recording rather than a screenshot.
     var isRecording: Bool { Cornerstack.isRecording(url) }
 
     static func == (a: Shot, b: Shot) -> Bool {
-        a.id == b.id && a.falling == b.falling && a.flying == b.flying && a.thumb === b.thumb
+        a.id == b.id && a.falling == b.falling && a.flying == b.flying && a.kept == b.kept
+            && a.thumb === b.thumb
     }
+}
+
+/// A short note over a card, like "Copied", that fades after a moment.
+struct Badge: Equatable {
+    let id: UUID
+    let text: String
+    let symbol: String
 }
 
 /// The stack itself: what is on it and what you can do with each item.
@@ -26,7 +38,9 @@ struct Shot: Identifiable, Equatable {
 @MainActor
 final class Stack: ObservableObject {
     @Published private(set) var items: [Shot] = []
-    @Published var copiedID: UUID?
+    @Published private(set) var badge: Badge?
+    /// How wide the cards are on the current screen; see `CardWidth`.
+    @Published var cardWidth: CGFloat = 200
     @Published var draggingID: UUID?
     @Published var pressedID: UUID?
     /// Whether the stack is on screen.
@@ -36,8 +50,13 @@ final class Stack: ObservableObject {
     @Published var showsHint = false
 
     /// Card frames in window coordinates, reported by the views. The panel
-    /// uses them to only catch clicks over photos and let the rest through.
-    var hitRects: [UUID: CGRect] = [:]
+    /// uses them to only catch clicks over cards and let the rest through.
+    var hitRects: [UUID: CGRect] = [:] {
+        didSet { onLayout?() }
+    }
+    /// Called when the cards moved, so the panel can check again which
+    /// clicks it catches without waiting for the pointer to move.
+    var onLayout: (() -> Void)?
 
     var soundOn: Bool {
         get { !UserDefaults.standard.bool(forKey: "soundOff") }
@@ -46,7 +65,15 @@ final class Stack: ObservableObject {
 
     var liveCount: Int { items.filter { !$0.falling }.count }
 
+    /// How many cards fit on the screen the stack is on. More than this and
+    /// the oldest card leaves; see `Layout.capacity`.
+    var capacity = Layout.maxItems
+
     private let storeKey = "shots"
+    private let keptKey = "keptShots"
+    /// Files of the cards that left most recently, newest last, for "Put back
+    /// last card". Only kept while the app runs.
+    private var removed: [URL] = []
     /// Names of every file that has been on the stack since launch, so a
     /// screenshot you saved to the Desktop is not picked up there again.
     private var seenNames = Set<String>()
@@ -57,18 +84,17 @@ final class Stack: ObservableObject {
 
     // MARK: Adding and dropping
 
+    /// `thumb` is the card's image, decoded off the main thread; see
+    /// `loadCapture`.
     @discardableResult
-    func add(_ url: URL, flying: Bool = false) -> UUID? {
-        guard !items.contains(where: { $0.url == url && !$0.falling }),
-              let thumb = makeThumbnail(url) else { return nil }
+    func add(_ url: URL, thumb: NSImage, flying: Bool = false) -> UUID? {
+        guard !items.contains(where: { $0.url == url && !$0.falling }) else { return nil }
         var item = Shot(url: url, thumb: thumb)
         item.flying = flying
         items.append(item)
         seenNames.insert(url.lastPathComponent)
-        // A full stack lets the oldest card go. Its file stays where it is.
-        if liveCount > Layout.maxItems, let oldest = items.first(where: { !$0.falling }) {
-            letGo(oldest.id)
-        }
+        removed.removeAll { $0 == url }
+        trimToCapacity(sparing: item.id)
         save()
         play("Tink", volume: 0.35)
         return item.id
@@ -91,6 +117,7 @@ final class Stack: ObservableObject {
 
     func drop(_ id: UUID, quietly: Bool = false) {
         guard let i = items.firstIndex(where: { $0.id == id }), !items[i].falling else { return }
+        remember(items[i].url)
         onFall?(items[i])
         items[i].falling = true
         hitRects[id] = nil
@@ -101,14 +128,25 @@ final class Stack: ObservableObject {
         }
     }
 
-    /// "Clear stack": every card leaves, like with its corner cross. The
-    /// files stay where they are.
+    /// "Clear stack": every card leaves, like with its corner cross, except
+    /// the ones you keep. The files stay where they are.
     func clear() {
-        let live = items.filter { !$0.falling }
+        let live = items.filter { !$0.falling && !$0.kept }
         for (n, item) in live.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.06 * Double(n)) { [weak self] in
                 self?.drop(item.id, quietly: n > 0)
             }
+        }
+    }
+
+    /// A full stack lets cards go until it fits: the oldest one you don't
+    /// keep first, the oldest kept one only when every card is kept. Their
+    /// files stay where they are.
+    func trimToCapacity(sparing spared: UUID? = nil) {
+        while liveCount > capacity {
+            let candidates = items.filter { !$0.falling && $0.id != spared }
+            guard let leaving = candidates.first(where: { !$0.kept }) ?? candidates.first else { return }
+            letGo(leaving.id)
         }
     }
 
@@ -130,11 +168,50 @@ final class Stack: ObservableObject {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.writeObjects([entry])
+        flash(L("Copied"), on: id)
+    }
 
-        copiedID = id
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            if self?.copiedID == id { self?.copiedID = nil }
+    /// The text in a screenshot, read on this Mac. See `TextRecognition`.
+    func copyText(_ id: UUID) {
+        guard let item = items.first(where: { $0.id == id }) else { return }
+        TextRecognition.text(in: item.url) { [weak self] text in
+            guard let self else { return }
+            guard let text else {
+                self.flash(L("No text found"), symbol: "text.magnifyingglass", on: id)
+                return
+            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            self.flash(L("Copied text"), on: id)
         }
+    }
+
+    /// The file's path, quoted for a shell, for tools in a terminal.
+    func copyPath(_ id: UUID) {
+        guard let item = items.first(where: { $0.id == id }) else { return }
+        let quoted = "'" + item.url.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(quoted, forType: .string)
+        flash(L("Copied path"), on: id)
+    }
+
+    /// Quick Look on this card, with the rest of the stack a key press away.
+    func quickLook(_ id: UUID) {
+        let live = items.filter { !$0.falling }
+        guard let index = live.firstIndex(where: { $0.id == id }) else { return }
+        QuickLook.shared.show(live.map(\.url), at: index)
+    }
+
+    /// A drop into an app: the card leaves, unless you keep it.
+    func dropUnlessKept(_ id: UUID) {
+        guard let item = items.first(where: { $0.id == id }), !item.kept else { return }
+        drop(id)
+    }
+
+    func toggleKeep(_ id: UUID) {
+        guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+        items[i].kept.toggle()
+        save()
     }
 
     func open(_ id: UUID) {
@@ -175,6 +252,31 @@ final class Stack: ObservableObject {
     /// The oldest photo leaving a full stack. Its file stays where it is.
     private func letGo(_ id: UUID) {
         drop(id, quietly: true)
+    }
+
+    // MARK: Putting back
+
+    /// Whether a card that left can come back: its file is still there and
+    /// it is not on the stack already.
+    var canPutBack: Bool { removed.contains(where: canComeBack) }
+
+    /// The file of the card that left most recently and can come back.
+    func takeBackLastRemoved() -> URL? {
+        while let url = removed.popLast() {
+            if canComeBack(url) { return url }
+        }
+        return nil
+    }
+
+    private func canComeBack(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
+            && !items.contains(where: { $0.url == url && !$0.falling })
+    }
+
+    private func remember(_ url: URL) {
+        removed.removeAll { $0 == url }
+        removed.append(url)
+        if removed.count > Layout.maxItems { removed.removeFirst() }
     }
 
     /// Inbox mode: keep a screenshot by moving it to the Desktop.
@@ -251,23 +353,35 @@ final class Stack: ObservableObject {
     // MARK: Persistence
 
     private func save() {
-        let paths = items.filter { !$0.falling }.map(\.url.path)
-        UserDefaults.standard.set(paths, forKey: storeKey)
+        let live = items.filter { !$0.falling }
+        UserDefaults.standard.set(live.map(\.url.path), forKey: storeKey)
+        UserDefaults.standard.set(live.filter(\.kept).map(\.url.path), forKey: keptKey)
     }
 
     /// Everything comes back as it was, without the sound and the save that
     /// `add` does.
     private func restore() {
         let paths = UserDefaults.standard.stringArray(forKey: storeKey) ?? []
+        let kept = Set(UserDefaults.standard.stringArray(forKey: keptKey) ?? [])
         for path in paths where FileManager.default.fileExists(atPath: path) {
             let url = URL(fileURLWithPath: path)
             guard !items.contains(where: { $0.url == url }), let thumb = makeThumbnail(url) else { continue }
-            items.append(Shot(url: url, thumb: thumb))
+            var item = Shot(url: url, thumb: thumb)
+            item.kept = kept.contains(path)
+            items.append(item)
             seenNames.insert(url.lastPathComponent)
         }
     }
 
     // MARK: Helpers
+
+    private func flash(_ text: String, symbol: String = "checkmark", on id: UUID) {
+        let note = Badge(id: id, text: text, symbol: symbol)
+        badge = note
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            if self?.badge == note { self?.badge = nil }
+        }
+    }
 
     private func play(_ name: String, volume: Float) {
         guard soundOn, let sound = NSSound(named: name)?.copy() as? NSSound else { return }
@@ -275,10 +389,15 @@ final class Stack: ObservableObject {
         sound.play()
     }
 
+    /// A PNG file goes on the clipboard as it is; any other image is
+    /// converted straight from the file, keeping its resolution and colours.
     private func pngData(_ url: URL) -> Data? {
         if url.pathExtension.lowercased() == "png" { return try? Data(contentsOf: url) }
-        guard let tiff = NSImage(contentsOf: url)?.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff) else { return nil }
-        return rep.representation(using: .png, properties: [:])
+        let data = NSMutableData()
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)
+        else { return nil }
+        CGImageDestinationAddImageFromSource(destination, source, 0, nil)
+        return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 }

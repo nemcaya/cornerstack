@@ -2,9 +2,14 @@ import AppKit
 
 /// A transparent column along the right edge of the screen, above the Dock,
 /// that floats over every app and every Space, full screen ones too unless
-/// turned off in the menu. It never takes focus, and lets clicks pass through
+/// turned off in Settings. It never takes focus, and lets clicks pass through
 /// everywhere except over the cards.
 final class StackPanel: NSPanel {
+    /// Called when the pointer moves over the panel or leaves it, which the
+    /// panel only notices while it catches clicks, over a card. The rest is
+    /// up to `AppDelegate.startMouseTracking`.
+    var onPointerMove: () -> Void = {}
+
     init(content: NSView) {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
@@ -21,8 +26,20 @@ final class StackPanel: NSPanel {
         isMovable = false
         becomesKeyOnlyIfNeeded = true
         ignoresMouseEvents = true
-        contentView = content
+        // The stack sits in a container that watches the whole panel, so a
+        // pointer leaving a card for the empty part of the column is noticed.
+        let container = NSView()
+        container.addTrackingArea(NSTrackingArea(
+            rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self, userInfo: nil))
+        contentView = container
+        content.frame = container.bounds
+        content.autoresizingMask = [.width, .height]
+        container.addSubview(content)
     }
+
+    override func mouseMoved(with event: NSEvent) { onPointerMove() }
+    override func mouseExited(with event: NSEvent) { onPointerMove() }
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
@@ -35,10 +52,11 @@ final class StackPanel: NSPanel {
             ?? NSScreen.main ?? NSScreen.screens.first
     }
 
-    func placeOnScreen(_ screen: NSScreen? = nil) {
-        guard let visible = (screen ?? StackPanel.screenUnderPointer())?.visibleFrame else { return }
-        let target = NSRect(x: visible.maxX - Layout.panelWidth, y: visible.minY,
-                            width: Layout.panelWidth, height: visible.height)
+    /// A column as wide as the cards need, along the right edge of the
+    /// screen's visible area, so it sits above the Dock.
+    func placeOnScreen(_ screen: NSScreen, width: CGFloat) {
+        let visible = screen.visibleFrame
+        let target = NSRect(x: visible.maxX - width, y: visible.minY, width: width, height: visible.height)
         if frame != target { setFrame(target, display: true) }
     }
 }

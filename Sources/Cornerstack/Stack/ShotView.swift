@@ -9,7 +9,7 @@ struct ShotView: View {
     @State private var arrived = false
     @State private var hovering = false
 
-    private var copied: Bool { stack.copiedID == item.id }
+    private var badge: Badge? { stack.badge?.id == item.id ? stack.badge : nil }
     private var dragging: Bool { stack.draggingID == item.id }
     private var pressed: Bool { stack.pressedID == item.id }
 
@@ -27,7 +27,7 @@ struct ShotView: View {
     /// is a wide card and a tall one a narrow card.
     private var cardSize: CGSize {
         let size = item.thumb.size
-        let maxW = Layout.cardWidth, maxH = Layout.maxCardHeight
+        let maxW = stack.cardWidth, maxH = Layout.maxCardHeight(stack.cardWidth)
         guard size.width > 0, size.height > 0 else { return CGSize(width: maxW, height: maxH) }
         let scale = min(maxW / size.width, maxH / size.height)
         return CGSize(width: size.width * scale, height: size.height * scale)
@@ -63,21 +63,19 @@ struct ShotView: View {
             .animation(pressed ? .easeInOut(duration: 0.45) : .spring(response: 0.3, dampingFraction: 0.6), value: pressed)
             .opacity(dragging ? 0.45 : 1)
             .overlay(alignment: .topLeading) {
-                // Drawn here, clicked through GrabView, which sits on top.
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 20, height: 20)
-                    .glassFrame(circle: true)
-                    .padding(3)
-                    .opacity(hovering && !dragging ? 1 : 0)
-                    .scaleEffect(hovering ? 1 : 0.6)
-                    .allowsHitTesting(false)
+                // Drawn here, clicked through GrabView, which sits on top. A
+                // kept card has no cross, so it can't be removed by accident.
+                cornerButton("xmark", visible: hovering && !dragging && !item.kept)
+            }
+            .overlay(alignment: .topTrailing) {
+                // The pin keeps a card on the stack. A kept card shows it all
+                // the time; any other card on hover.
+                cornerButton(item.kept ? "pin.fill" : "pin", visible: item.kept || (hovering && !dragging))
             }
             .overlay(GrabArea(item: item, stack: stack))
             .overlay {
-                if copied {
-                    Label(L("Copied"), systemImage: "checkmark")
+                if let badge {
+                    Label(badge.text, systemImage: badge.symbol)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 10)
@@ -88,7 +86,8 @@ struct ShotView: View {
                 }
             }
             .animation(.easeOut(duration: 0.18), value: hovering)
-            .animation(.easeOut(duration: 0.2), value: copied)
+            .animation(.easeOut(duration: 0.2), value: badge)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: item.kept)
             .onHover { hovering = $0 }
             .background(
                 GeometryReader { g in
@@ -96,6 +95,19 @@ struct ShotView: View {
                                            value: item.falling ? [:] : [item.id: g.frame(in: .global)])
                 }
             )
+    }
+
+    /// A small glass button in a corner of the card, faded out until needed.
+    private func cornerButton(_ symbol: String, visible: Bool) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(.primary)
+            .frame(width: 20, height: 20)
+            .glassFrame(circle: true)
+            .padding(3)
+            .opacity(visible ? 1 : 0)
+            .scaleEffect(visible ? 1 : 0.6)
+            .allowsHitTesting(false)
     }
 
     private func arrive() {

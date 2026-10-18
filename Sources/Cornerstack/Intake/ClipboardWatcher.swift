@@ -50,6 +50,8 @@ final class ClipboardWatcher {
         let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.check() }
         }
+        // A little slack lets macOS group this check with other wake ups.
+        timer.tolerance = 0.1
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }
