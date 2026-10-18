@@ -19,7 +19,7 @@
 
 <br>
 
-<img src="docs/images/demo.gif" alt="Three app windows on a desktop. Each one is captured and flies into a stack in the bottom right corner. The pointer clicks the newest card to copy it, then discards another one with its cross.">
+<img src="docs/images/demo-v1.1.gif" alt="Three app windows on a desktop. Each one is captured and flies into a stack in the bottom right corner. The pointer clicks the newest card to copy it, drags another one into a chat, where it shows up as a sent image, and discards the last one with its cross.">
 
 ## What it does
 
