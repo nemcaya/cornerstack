@@ -18,6 +18,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var signalSources: [DispatchSourceSignal] = []
     private var hotKeys: [HotKey] = []
     private let settingsWindow = SettingsWindow()
+    private let historyWindow = HistoryWindow()
+    private lazy var history = HistoryModel(actions: .init(
+        putBack: { [weak self] url in self?.addCapture(url) },
+        isOnStack: { [weak self] url in self?.stack.contains(url) ?? false },
+        trashed: { [weak self] in self?.stack.prune() }
+    ))
+    /// The files on the stack at the last look, so History reloads only when
+    /// a capture arrives or leaves.
+    private var stackFiles: [URL] = []
     private lazy var settings = SettingsModel(actions: .init(
         applyCardWidth: { [weak self] fitting in self?.placePanel(on: self?.panel.screen, fitting: fitting) },
         automaticWidth: { [weak self] in
@@ -30,6 +39,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.refresh()
         },
         setSounds: { [weak self] on in self?.stack.soundOn = on },
+        setTuckDelay: { [weak self] delay in
+            TuckAway.delay = delay
+            guard let self else { return }
+            if delay == 0 { self.setTucked(false) }
+            self.scheduleTuck()
+        },
+        setHoverKeys: { [weak self] on in
+            HoverKeys.isEnabled = on
+            if on { self?.updateMousePassThrough() } else { self?.hoverKeys.stop() }
+        },
         setOpenAtLogin: { on in AppDelegate.setOpenAtLogin(on) },
         registerShortcuts: { [weak self] paused in self?.registerShortcuts(paused: paused) ?? [] }
     ))
@@ -62,6 +81,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     /// Tells a hint's timer whether it is still the latest one.
     private var hintToken = 0
+    /// Slid off the edge of the screen, with only its tab showing; see `TuckAway`.
+    private var isTucked = false
+    private var tuckTimer: Timer?
+    private var revealTimer: Timer?
+    /// Where the pointer was when the stack tucked away. A pointer that was
+    /// already resting where the tab appears has to move onto it first.
+    private var tuckedAt: CGPoint?
+    /// Whether the pointer is on a card. The stack never tucks away under it.
+    private var pointerOnCard = false
+    /// Where the pointer was at the last check, to tell a move from a click.
+    private var lastPointer: CGPoint?
+    /// A menu is open: a card's, or the menu bar icon's.
+    private var menuOpen = false
+    private let hoverKeys = HoverKeys()
+    /// The share menu that S opens, kept while it shows.
+    private var sharePicker: NSSharingServicePicker?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let host = NSHostingView(rootView: StackView(stack: stack))
@@ -91,16 +126,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Markup.shared.onSaved = { [weak self] url in self?.stack.reloadThumbnail(for: url) }
         Trim.shared.onSaved = { [weak self] url in self?.stack.reloadThumbnail(for: url) }
         stack.onFall = { [weak self] item in self?.fall(item) }
+        hoverKeys.perform = { [weak self] key, id in self?.hoverKey(key, on: id) }
+        // The stack doesn't tuck away while a menu is open.
+        for (name, open) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.menuOpen = open
+                    if open { self?.hoverKeys.stop() }
+                }
+            }
+        }
 
         stack.$items
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.itemsChanged() }
             .store(in: &cancellables)
         // A drag can end without moving a card, with the pointer resting
-        // wherever it let go.
+        // wherever it let go. When one starts, the keys over a card let go:
+        // Space or Delete belong to wherever the card is dragged.
         stack.$draggingID
-            .receive(on: RunLoop.main)
-            .sink { [weak self] id in if id == nil { self?.updateMousePassThrough() } }
+            // Not RunLoop.main: that waits while AppKit tracks the drag.
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateMousePassThrough() }
             .store(in: &cancellables)
         for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -224,6 +271,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// An empty stack goes away, unless it is showing its hint.
     private func itemsChanged() {
+        let files = stack.items.filter { !$0.falling }.map(\.url)
+        if files != stackFiles {
+            stackFiles = files
+            if historyWindow.isOpen { history.reload() }
+        }
         guard stack.liveCount == 0, !keepOpen else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
             guard let self, self.stack.liveCount == 0, !self.keepOpen else { return }
@@ -235,6 +287,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The stack shows on that screen and stays. Without a screen, it uses
     /// the one under the pointer.
     private func showStack(on screen: NSScreen?) {
+        // Tucked away, the cards come back at once, without sliding, so a
+        // new capture can measure where it lands.
+        setTucked(false, slide: false)
         placePanel(on: screen)
         wanted = true
         hiddenByUser = false
@@ -242,10 +297,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // once it is empty.
         keepOpen = false
         refresh()
+        scheduleTuck()
     }
 
     /// An empty stack shows its hint for a moment, then goes away again.
     private func showHint(for seconds: TimeInterval) {
+        setTucked(false, slide: false)
         keepOpen = true
         wanted = true
         refresh()
@@ -329,6 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// A new screenshot lifts off from where it was taken and flies to its
     /// place on the stack. Without a known capture area it simply drops in.
     private func addCapture(_ url: URL) {
+        guard !stack.contains(url) else { return }
         let from = captureRect(of: url)
         // The flight starts out at the captured size, so it needs a sharper
         // image than the card, up to a limit: a full Retina screen would
@@ -355,6 +413,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             itemsChanged()
             return
         }
+        // A new capture starts the wait before tucking away over again.
+        scheduleTuck()
         guard let from, let image = images.flight else { return }
         // Let the stack appear and lay out before measuring the landing spot.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
@@ -388,7 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// A card that leaves falls over the whole screen, from where it sits.
     private func fall(_ item: Shot) {
-        guard isPresent, isShown, !item.flying, let screen = panel.screen,
+        guard isPresent, isShown, !isTucked, !item.flying, let screen = panel.screen,
               let card = cardFrame(for: item.id),
               let image = item.thumb.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
         CaptureFlight.fall(image: image, card: card, on: screen)
@@ -429,18 +489,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // checks what is on top, like screen automation.
         if on {
             panel.orderFrontRegardless()
+            // Back from a full screen app, still tucked: a pointer resting
+            // where the tab appears has to move onto it first.
+            if isTucked { tuckedAt = NSEvent.mouseLocation }
         } else {
             panel.ignoresMouseEvents = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self, !self.isShown else { return }
                 self.panel.orderOut(nil)
             }
+            // A tucked stack stays tucked while it fades out, so its cards
+            // don't flash back, and comes back the way it was. A new capture
+            // or the hint shows the cards again.
+            tuckTimer?.invalidate()
+            tuckTimer = nil
+            revealTimer?.invalidate()
+            revealTimer = nil
+            pointerOnCard = false
+            hoverKeys.stop()
         }
         // The pointer only needs watching while there are cards to point at.
         if on { startMouseTracking() } else { stopMouseTracking() }
+        if on { scheduleTuck() }
     }
 
     private func toggle() {
+        // Tucked away, the shortcut brings the cards back rather than hiding them.
+        if isShown && isTucked {
+            setTucked(false)
+            return
+        }
         if isShown {
             hiddenByUser = true
             keepOpen = false
@@ -461,6 +539,128 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // MARK: Tucking away
+
+    /// Starts the wait before the stack tucks away, over again. It only runs
+    /// while the stack shows cards and the pointer is not on one of them.
+    private func scheduleTuck(after delay: TimeInterval = TuckAway.delay) {
+        tuckTimer?.invalidate()
+        tuckTimer = nil
+        guard TuckAway.delay > 0, isShown, !isTucked, !pointerOnCard, stack.liveCount > 0 else { return }
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tuckIfIdle() }
+        }
+        timer.tolerance = 0.25
+        RunLoop.main.add(timer, forMode: .common)
+        tuckTimer = timer
+    }
+
+    private func tuckIfIdle() {
+        tuckTimer = nil
+        guard TuckAway.delay > 0, isShown, !isTucked, !pointerOnCard, stack.liveCount > 0 else { return }
+        // In the middle of something: a drag, a press, an open menu, a
+        // capture still flying in or a note on a card. Try again shortly.
+        if GrabView.isDragging || stack.pressedID != nil || menuOpen || CaptureFlight.flightsInProgress > 0
+            || stack.badge != nil {
+            scheduleTuck(after: 1.5)
+            return
+        }
+        setTucked(true)
+    }
+
+    private func setTucked(_ on: Bool, slide: Bool = true) {
+        revealTimer?.invalidate()
+        revealTimer = nil
+        guard on != isTucked else { return }
+        stack.tuckSlides = slide
+        isTucked = on
+        stack.isTucked = on
+        tuckedAt = on ? NSEvent.mouseLocation : nil
+        if on {
+            pointerOnCard = false
+            hoverKeys.stop()
+        }
+        updateMousePassThrough()
+        if !on { scheduleTuck() }
+    }
+
+    /// Tucked away, the panel only catches the mouse over the tab, and the
+    /// cards come back once the pointer rests on it for a moment.
+    private func followTab(at point: CGPoint) {
+        let overTab = stack.tabRect.map { $0.insetBy(dx: -6, dy: -8).contains(point) } ?? false
+        if panel.ignoresMouseEvents == overTab {
+            panel.ignoresMouseEvents = !overTab
+        }
+        if let rest = tuckedAt {
+            let now = NSEvent.mouseLocation
+            if hypot(now.x - rest.x, now.y - rest.y) > 3 { tuckedAt = nil }
+        }
+        guard overTab, tuckedAt == nil else {
+            revealTimer?.invalidate()
+            revealTimer = nil
+            return
+        }
+        guard revealTimer == nil else { return }
+        let timer = Timer(timeInterval: TuckAway.revealDelay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.revealTimer = nil
+                guard self.isTucked, let tab = self.stack.tabRect,
+                      tab.insetBy(dx: -6, dy: -8).contains(self.pointerInPanel()) else { return }
+                self.setTucked(false)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        revealTimer = timer
+    }
+
+    /// The pointer in the coordinates the views report: inside the panel,
+    /// from its top left corner.
+    private func pointerInPanel() -> CGPoint {
+        let local = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+        return CGPoint(x: local.x, y: panel.frame.height - local.y)
+    }
+
+    // MARK: Keys over a card
+
+    private func hoverKey(_ key: HoverKeys.Key, on id: UUID) {
+        guard isShown, !isTucked, !GrabView.isDragging,
+              let item = stack.items.first(where: { $0.id == id && !$0.falling }) else { return }
+        switch key {
+        case .copy: stack.copy(id)
+        case .copyAtOneX where item.isRecording, .copyText where item.isRecording,
+             .hideSecrets where item.isRecording:
+            // Recordings have no text to read.
+            NSSound.beep()
+        case .copyAtOneX: stack.copyAtOneX(id)
+        case .copyText: stack.copyText(id)
+        case .share: share(id)
+        case .hideSecrets: stack.hideSecrets(id)
+        case .code: stack.useCode(id)
+        case .keep: stack.toggleKeep(id)
+        case .quickLook:
+            // Space again closes it, as in Finder.
+            if QLPreviewPanel.sharedPreviewPanelExists(), let preview = QLPreviewPanel.shared(), preview.isVisible {
+                preview.orderOut(nil)
+            } else {
+                stack.quickLook(id)
+            }
+        case .remove:
+            // Like the cross, which a kept card doesn't have.
+            if item.kept { NSSound.beep() } else { stack.drop(id) }
+        }
+    }
+
+    /// The system's share menu, next to the card.
+    private func share(_ id: UUID) {
+        guard let item = stack.items.first(where: { $0.id == id }), let r = stack.hitRects[id],
+              let content = panel.contentView else { return }
+        let rect = NSRect(x: r.minX, y: panel.frame.height - r.maxY, width: r.width, height: r.height)
+        let picker = NSSharingServicePicker(items: [item.url])
+        sharePicker = picker
+        picker.show(relativeTo: rect, of: content, preferredEdge: .minX)
+    }
+
     // MARK: Following the pointer
 
     /// While the stack shows, it follows the pointer to know when to catch
@@ -470,12 +670,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// pointer rests.
     private func startMouseTracking() {
         guard mouseMonitors.isEmpty else { return }
+        lastPointer = NSEvent.mouseLocation
         let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseUp]
         let global = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
             MainActor.assumeIsolated { self?.pointerMoved() }
         }
-        let local = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-            MainActor.assumeIsolated { self?.pointerMoved() }
+        let local = NSEvent.addLocalMonitorForEvents(matching: mask.union(.rightMouseDown)) { [weak self] event in
+            MainActor.assumeIsolated {
+                // A click on a card pauses its keys until the pointer moves:
+                // what you type next belongs to the app you paste into.
+                if event.type != .mouseMoved, event.window === self?.panel { self?.hoverKeys.pause() }
+                self?.pointerMoved()
+            }
             return event
         }
         mouseMonitors = [global, local].compactMap { $0 }
@@ -525,21 +731,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             staleStateSince = nil
         }
-        updateMousePassThrough()
+        // Clicks and the timer while Cornerstack is active also land here;
+        // only a change of place counts as a move.
+        let point = NSEvent.mouseLocation
+        let moved = lastPointer.map { hypot(point.x - $0.x, point.y - $0.y) >= 0.5 } ?? true
+        lastPointer = point
+        updateMousePassThrough(moved: moved)
     }
 
     /// The panel is a tall column, so it only accepts the mouse while the
     /// cursor is over a card. Everywhere else, clicks go to whatever is
     /// underneath. Also called when something changes under a resting
     /// pointer: the cards move, a drag ends or the panel moves.
-    private func updateMousePassThrough() {
-        guard isShown, !GrabView.isDragging else { return }
-        let local = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        let flipped = CGPoint(x: local.x, y: panel.frame.height - local.y)
+    /// `moved` says that the pointer moved, which the keys over a card need.
+    private func updateMousePassThrough(moved: Bool = false) {
+        guard isShown else { return }
+        guard !GrabView.isDragging else {
+            hoverKeys.stop()
+            return
+        }
+        let flipped = pointerInPanel()
+        if isTucked {
+            followTab(at: flipped)
+            return
+        }
         let overCard = stack.hitRects.values.contains { $0.insetBy(dx: -4, dy: -4).contains(flipped) }
         if panel.ignoresMouseEvents == overCard {
             panel.ignoresMouseEvents = !overCard
         }
+        // The wait before tucking away stops while the pointer is on a card
+        // and starts over when it leaves.
+        if overCard != pointerOnCard {
+            pointerOnCard = overCard
+            if overCard {
+                tuckTimer?.invalidate()
+                tuckTimer = nil
+            } else {
+                scheduleTuck()
+            }
+        }
+        let hovered = stack.hitRects.first { id, rect in
+            rect.contains(flipped) && stack.items.contains { $0.id == id && !$0.falling }
+        }?.key
+        hoverKeys.update(card: menuOpen ? nil : hovered, moved: moved)
     }
 
     // MARK: Menu bar
@@ -569,7 +803,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
-        let toggleItem = ClosureMenuItem(isShown ? L("Hide stack") : L("Show stack")) { [weak self] in
+        let toggleItem = ClosureMenuItem(isShown && !isTucked ? L("Hide stack") : L("Show stack")) { [weak self] in
             self?.toggle()
         }
         ShortcutAction.toggleStack.shortcut?.show(in: toggleItem)
@@ -596,6 +830,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        menu.addItem(ClosureMenuItem(L("History…"), key: "y") { [weak self] in
+            guard let self else { return }
+            self.historyWindow.show(self.history)
+        })
         menu.addItem(ClosureMenuItem(L("Open screenshots folder")) { [weak self] in
             guard let self else { return }
             NSWorkspace.shared.open(self.watcher.folder)

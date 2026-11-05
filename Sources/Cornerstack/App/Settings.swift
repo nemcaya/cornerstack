@@ -19,6 +19,9 @@ final class SettingsModel: ObservableObject {
         var setClipboard: (Bool) -> Void
         var setOverFullScreen: (Bool) -> Void
         var setSounds: (Bool) -> Void
+        /// Seconds before the stack tucks away, 0 for never.
+        var setTuckDelay: (TimeInterval) -> Void
+        var setHoverKeys: (Bool) -> Void
         /// Returns false when macOS refused the change.
         var setOpenAtLogin: (Bool) -> Bool
         /// Takes the shortcuts again, or lets go of them while a new one is
@@ -32,6 +35,8 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var addCopiedImages = false
     @Published private(set) var overFullScreen = true
     @Published private(set) var sounds = true
+    @Published private(set) var tuckDelay: TimeInterval = 10
+    @Published private(set) var hoverKeys = true
     @Published private(set) var openAtLogin = false
     @Published private(set) var shortcuts: [ShortcutAction: Shortcut] = [:]
     /// The shortcut being typed, and what to tell you about the last try.
@@ -53,6 +58,8 @@ final class SettingsModel: ObservableObject {
         addCopiedImages = ClipboardWatcher.isEnabled
         overFullScreen = FullScreen.showOverFullScreen
         sounds = soundsOn
+        tuckDelay = TuckAway.delay
+        hoverKeys = HoverKeys.isEnabled
         openAtLogin = SMAppService.mainApp.status == .enabled
         loadShortcuts()
     }
@@ -99,6 +106,16 @@ final class SettingsModel: ObservableObject {
     func setSounds(_ on: Bool) {
         sounds = on
         actions.setSounds(on)
+    }
+
+    func setTuckDelay(_ delay: TimeInterval) {
+        tuckDelay = delay
+        actions.setTuckDelay(delay)
+    }
+
+    func setHoverKeys(_ on: Bool) {
+        hoverKeys = on
+        actions.setHoverKeys(on)
     }
 
     func setOpenAtLogin(_ on: Bool) {
@@ -200,6 +217,22 @@ struct SettingsView: View {
                             .frame(width: 52, alignment: .trailing)
                     }
                 }
+            }
+
+            Section {
+                Picker(L("Tuck away"), selection: Binding(get: { model.tuckDelay },
+                                                         set: { model.setTuckDelay($0) })) {
+                    ForEach(TuckAway.choices, id: \.self) { delay in
+                        Text(TuckAway.title(for: delay)).tag(delay)
+                    }
+                }
+                Toggle(L("Keys over a card"), isOn: Binding(get: { model.hoverKeys },
+                                                           set: { model.setHoverKeys($0) }))
+            } header: {
+                Text(L("Stack"))
+            } footer: {
+                Text(L("Left alone, the stack slides into a small tab at the edge of the screen. Point at the tab, take a screenshot or use the shortcut to bring it back. With keys on, point at a card and press C to copy it, 1 to copy it at 1x, T to copy its text, S to share it, R to hide its secrets, L to open its QR code, P to keep it, Space for Quick Look or ⌫ to remove it."))
+                    .foregroundStyle(.secondary)
             }
 
             Section {

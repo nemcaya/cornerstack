@@ -30,6 +30,11 @@ func makeThumbnail(_ url: URL) -> NSImage? {
     decodeImage(url, maxPixels: cardPixels).map(cardImage(from:))
 }
 
+/// A smaller image for History's grid. Safe to make off the main thread.
+func makeThumbnail(_ url: URL, maxPixels: Int) -> NSImage? {
+    decodeImage(url, maxPixels: maxPixels).map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+}
+
 private func cardImage(from image: CGImage) -> NSImage {
     let card = downscale(image, maxPixels: cardPixels)
     return NSImage(cgImage: card, size: NSSize(width: card.width, height: card.height))

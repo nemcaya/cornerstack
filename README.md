@@ -28,11 +28,14 @@ three screenshots in a row and only the newest is still there to grab.
 
 Cornerstack keeps them. Every capture lands in a stack in the bottom right
 corner, newest closest to the corner, and stays until you drag it somewhere
-or throw it away. Nothing times out.
+or throw it away. Nothing times out. Leave the stack alone for a few seconds
+and it tucks into a small tab at the edge of the screen; point at the tab and
+it's back.
 
 | | |
 |:--|:--|
 | Click | Copy the image. |
+| <kbd>⇧</kbd> click | Copy it at 1x: half the size of a Retina screenshot, as big as it looked on screen. |
 | <kbd>⌥</kbd> click | Copy the file's path, quoted and ready to paste into a terminal. |
 | Press and hold | Open it in Markup. Screen recordings open in a trimmer. |
 | Double click | Open it in its default app. |
@@ -42,9 +45,12 @@ or throw it away. Nothing times out.
 | Drag to the Trash | Move the file to the Trash. |
 | Click the cross | Remove it from the stack. The file stays where it is. |
 | Click the pin | Keep the card on the stack. A kept card has no cross; click the pin again to let it go. |
-| Right click | Every option, including Keep on stack, Copy Text and Quick Look. |
+| Click the QR button | Open the link in a QR code on the screenshot, or copy what the code says. |
+| Point at a card and press a key | <kbd>C</kbd> copy, <kbd>1</kbd> copy at 1x, <kbd>T</kbd> copy text, <kbd>S</kbd> share, <kbd>R</kbd> hide secrets, <kbd>L</kbd> open the QR code, <kbd>P</kbd> keep, <kbd>Space</kbd> Quick Look, <kbd>⌫</kbd> remove. |
+| Point at the tab | Bring a tucked away stack back. A new capture brings it back too. |
+| Right click | Every option, including Share, Hide Secrets, Copy Text and Quick Look. |
 | <kbd>⌥</kbd>&thinsp;<kbd>⌘</kbd>&thinsp;<kbd>C</kbd> | Copy the newest card from anywhere, without touching the mouse. |
-| <kbd>⌥</kbd>&thinsp;<kbd>⌘</kbd>&thinsp;<kbd>T</kbd> | Hide the stack for a while, and bring it back. |
+| <kbd>⌥</kbd>&thinsp;<kbd>⌘</kbd>&thinsp;<kbd>T</kbd> | Hide the stack for a while, and bring it back. A tucked away stack comes back. |
 
 ## Details
 
@@ -57,7 +63,14 @@ or throw it away. Nothing times out.
 - **Up to five.** Once the stack is full, a new capture pushes out the oldest card you don't keep. Large cards on a small screen fit fewer than five. Its file stays where it is.
 - **Kept or put back.** The pin in a card's top right corner keeps it. Drops into apps and *Clear stack* leave a kept card in place, new captures push the other cards out first, and it has no cross, so it can't go by accident. *Put back last card* in the menu bar restores the cards that left most recently, while their files still exist.
 - **Copied images too.** Switch on *Add copied images* in Settings and images you copy join the stack. Only images: anything copied along with text or a file, and anything a password manager marks as private, is left alone.
-- **Text from images.** *Copy Text* copies the text in a screenshot. Apple's Vision framework reads it on your Mac, without the internet.
+- **Tucks away.** Left alone for 10 seconds, the cards slide off the edge of the screen and a small tab just above the corner shows how many wait there. The tab stays clear of the corner itself, so a Hot Corner there (Quick Note, by default) still works. Choose 5, 10 or 30 seconds, or never, in Settings.
+- **Keys over a card.** Point at a card and press one key, no clicking: <kbd>C</kbd>, <kbd>1</kbd>, <kbd>T</kbd>, <kbd>S</kbd>, <kbd>R</kbd>, <kbd>L</kbd>, <kbd>P</kbd>, <kbd>Space</kbd> or <kbd>⌫</kbd>. The keys only work while the pointer is on a card, and pause after a key or a click until the pointer moves again, so what you type next goes to the app you are in. Turn them off in Settings.
+- **Text from images.** *Copy Text* copies the text in a screenshot, exactly as it is on screen, so code, links and keys survive. Apple's Vision framework reads each capture on your Mac, without the internet, as soon as it lands, so the text is ready when you ask.
+- **QR codes.** A screenshot with a QR code or barcode gets a button in its bottom left corner: it opens the link, or copies what the code says. The card's menu names the site before you open it.
+- **Hide secrets.** *Hide Secrets* adds a copy of the screenshot with API keys, tokens, passwords, email addresses, card numbers and IBANs painted over with solid bars, ready to paste into a chat or an issue. The original stays as it is. It goes by what the text looks like, so check the copy before you share it.
+- **Share.** AirDrop, Messages, Mail and the rest of the share menu, from a card's menu or with <kbd>S</kbd>.
+- **Copy at 1x.** A Retina screenshot has two pixels for every point, so it pastes twice as big as it looked, with four times the pixels to upload (and for an AI chat, to pay for). *Copy at 1x*, <kbd>⇧</kbd>-click or <kbd>1</kbd> copies it at the size it had on screen. The file stays as it is.
+- **History.** Menu bar icon › *History…* shows every capture of the last 30 days that was on the stack, by day. Drag one into any app, double click it to put it back on the stack, or right click to copy it, read its text or move it to the Trash.
 
 ## How it compares
 
@@ -79,14 +92,15 @@ or throw it away. Nothing times out.
 ## Privacy and permissions
 
 - No network, accounts or analytics. Your screenshots never leave your Mac.
-- Text recognition runs on your Mac.
+- Text recognition, QR codes and Hide Secrets run on your Mac.
+- No Accessibility permission: the keys over a card use the same shortcut API as <kbd>⌥</kbd>&thinsp;<kbd>⌘</kbd>&thinsp;<kbd>C</kbd>, and only while the pointer is on a card.
 - The clipboard is only read while *Add copied images* is on.
 - If your screenshots go to the Desktop, Documents or Downloads, macOS asks for access to that folder.
 
 ## Not planned
 
 - Capture modes or an annotation editor. Use CleanShot X or Shottr.
-- A history, a library or a long stack. Five cards is the point.
+- A library or a long stack. Five cards is the point; *History* keeps the last 30 days within reach.
 - Clipboard-manager features.
 - Cloud uploads or accounts.
 
@@ -100,6 +114,12 @@ On macOS 14 Sonoma, right-click the app and choose **Open** instead. Or skip the
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/Cornerstack.app
+```
+
+Or install it with [Homebrew](https://brew.sh), which skips the prompts:
+
+```sh
+brew install --cask nemcaya/tap/cornerstack
 ```
 
 Rather not run a downloaded binary at all? [Build it yourself](#build-from-source), it takes a minute.
@@ -128,14 +148,18 @@ after each rebuild.
 
 | Folder | File | Role |
 |:--|:--|:--|
-| `App` | `AppDelegate.swift` | Menu bar, shortcuts, showing and hiding the stack |
+| `App` | `AppDelegate.swift` | Menu bar, shortcuts, showing, hiding and tucking away the stack |
+| | `HoverKeys.swift` | The keys over a card |
+| | `History.swift` | The History window |
 | | `FullScreen.swift` | Knows when a full screen app is up |
 | | `Settings.swift` | The Settings window |
 | | `HotKey.swift`, `ClosureMenuItem.swift`, `Localization.swift` | Small helpers |
 | `Stack` | `Stack.swift` | What is in the stack, and what you can do with each card |
 | | `StackPanel.swift` | The transparent column along the right edge of the screen |
 | | `StackView.swift`, `ShotView.swift`, `Layout.swift` | The stack and its cards |
+| | `TuckAway.swift` | When the stack tucks away, and its tab |
 | | `GrabArea.swift` | Click, long press, drag and drop |
+| | `Copying.swift` | Copy, and Copy at 1x |
 | | `CaptureFlight.swift` | The flight of a new capture, and the fall of a discarded one |
 | | `Thumbnail.swift` | Decodes each capture once, for its card and its flight |
 | `Intake` | `ScreenshotWatcher.swift` | Notices new screenshots |
@@ -143,7 +167,8 @@ after each rebuild.
 | | `Inbox.swift` | Takes over the screenshot settings and puts them back |
 | `Editors` | `Markup.swift`, `Trim.swift` | Markup for screenshots, trimming for recordings |
 | | `QuickLook.swift` | Quick Look |
-| | `TextRecognition.swift` | Text recognition for Copy Text |
+| | `Reading.swift` | Reads the text and QR codes in each capture, once |
+| | `Secrets.swift` | Finds and paints over secrets for Hide Secrets |
 
 Text lives in `Sources/Cornerstack/Resources/<language>.lproj`. To add a
 language, copy `en.lproj`, translate the values and run
@@ -164,7 +189,7 @@ the menu bar. I wanted the same idea in the place macOS already puts its own
 screenshot preview, so I reworked how it looks and behaves:
 
 - a stack in the bottom right corner instead of a line along the top, with the newest capture nearest the corner;
-- no menu bar reveal and no auto-hide: the stack stays until you deal with every capture;
+- no menu bar reveal: the stack stays until you deal with every capture, and when you leave it alone it tucks into a tab at the edge of the screen instead of hiding;
 - dragging a capture into an app removes it from the stack, since you rarely need it twice;
 - a fix for drags that never report their end, which could freeze the stack;
 - shown over full screen apps and left out of new screenshots, with a faster flight animation.

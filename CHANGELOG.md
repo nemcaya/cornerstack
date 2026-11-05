@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0 (2026-11-05)
+
+- Tuck away: left alone for 10 seconds, the stack slides off the edge of the screen into a small tab just above the corner that shows how many cards wait there. Point at the tab, take a screenshot or press ⌥⌘T to bring it back. Nothing leaves the stack. Choose 5, 10 or 30 seconds, or never, in Settings.
+- Keys over a card: point at a card and press C to copy it, 1 to copy it at 1x, T to copy its text, S to share it, R to hide its secrets, L to open its QR code, P to keep it, Space for Quick Look or ⌫ to remove it. They pause after a key or a click until the pointer moves again, and need no Accessibility permission. Turn them off in Settings.
+- QR codes: a screenshot with a QR code or barcode gets a button that opens its link or copies what it says. Copy Text adds what the code says at the end.
+- Hide Secrets: a copy of the screenshot with API keys, tokens, passwords, email addresses, card numbers and IBANs painted over lands on the stack. The original stays as it is.
+- Share: the system's share menu (AirDrop, Messages, Mail and more) in a card's menu.
+- Copy at 1x: Shift-click a card, press 1 over it or choose Copy at 1x, and a Retina screenshot is copied at the size it had on screen, half as wide and high, for chats and issues. The file stays as it is.
+- History: menu bar icon › History… shows every capture of the last 30 days that was on the stack, grouped by day. Drag one into any app, double click it to put it back on the stack, or right click for Copy, Copy at 1x, Copy Text, Quick Look, Show in Finder and Move to Trash.
+- Copy Text keeps code, links and keys exactly as they are on screen, and is ready at once: each capture is read in the background when it lands.
+
 ## 1.1.0 (2026-10-18)
 
 - Settings window (menu bar icon › Settings…, or open the app again): card size, shortcuts, screenshot handling, copied images, full screen, sounds and open at login.

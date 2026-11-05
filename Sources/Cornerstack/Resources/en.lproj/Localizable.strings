@@ -12,6 +12,7 @@
 "Show stack" = "Show stack";
 "Copy newest" = "Copy newest";
 "Put back last card" = "Put back last card";
+"History…" = "History…";
 "Clear stack" = "Clear stack";
 "Open screenshots folder" = "Open screenshots folder";
 "Settings…" = "Settings…";
@@ -34,6 +35,14 @@
 "General" = "General";
 "Sounds" = "Sounds";
 "Open at login" = "Open at login";
+"Stack" = "Stack";
+"Tuck away" = "Tuck away";
+"Never" = "Never";
+"After 5 seconds" = "After 5 seconds";
+"After 10 seconds" = "After 10 seconds";
+"After 30 seconds" = "After 30 seconds";
+"Keys over a card" = "Keys over a card";
+"Left alone, the stack slides into a small tab at the edge of the screen. Point at the tab, take a screenshot or use the shortcut to bring it back. With keys on, point at a card and press C to copy it, 1 to copy it at 1x, T to copy its text, S to share it, R to hide its secrets, L to open its QR code, P to keep it, Space for Quick Look or ⌫ to remove it." = "Left alone, the stack slides into a small tab at the edge of the screen. Point at the tab, take a screenshot or use the shortcut to bring it back. With keys on, point at a card and press C to copy it, 1 to copy it at 1x, T to copy its text, S to share it, R to hide its secrets, L to open its QR code, P to keep it, Space for Quick Look or ⌫ to remove it.";
 "Shortcuts" = "Shortcuts";
 "Press keys…" = "Press keys…";
 "None" = "None";
@@ -47,6 +56,11 @@
 "Copy" = "Copy";
 "Copy Text" = "Copy Text";
 "Copy Path" = "Copy Path";
+"Copy at 1x" = "Copy at 1x";
+"Open Link" = "Open Link";
+"Copy Link" = "Copy Link";
+"Copy Code" = "Copy Code";
+"Hide Secrets" = "Hide Secrets";
 "Open" = "Open";
 "Quick Look" = "Quick Look";
 "Trim" = "Trim";
@@ -67,6 +81,15 @@
 "No text found" = "No text found";
 "Copied text" = "Copied text";
 "Copied path" = "Copied path";
+"Copied at 1x" = "Copied at 1x";
+"Copied, already 1x" = "Copied, already 1x";
+"No code found" = "No code found";
+"Opened link" = "Opened link";
+"Copied link" = "Copied link";
+"Copied code" = "Copied code";
+"No secrets found" = "No secrets found";
+"Secrets hidden" = "Secrets hidden";
+"(secrets hidden)" = "(secrets hidden)";
 
 /* Shortcuts */
 "Copy newest card" = "Copy newest card";
@@ -74,3 +97,9 @@
 
 /* StackView */
 "Take a screenshot and it will land here" = "Take a screenshot and it will land here";
+
+/* History */
+"Cornerstack History" = "Cornerstack History";
+"On the stack" = "On the stack";
+"Put back on stack" = "Put back on stack";
+"Screenshots from the last 30 days show up here once they have been on the stack." = "Screenshots from the last 30 days show up here once they have been on the stack.";

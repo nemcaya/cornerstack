@@ -6,8 +6,9 @@ import Quartz
 /// arrow keys step through the rest of the stack, and Space or Escape closes
 /// it. Adapted from Tendedero.
 ///
-/// The stack never takes the keyboard from the app you are in, so Space over
-/// a card cannot open it; the window takes the keyboard once it is open.
+/// The stack never takes the keyboard from the app you are in; Space over a
+/// card reaches it as one of the keys over a card (see `HoverKeys`). The
+/// window takes the keyboard once it is open.
 @MainActor
 final class QuickLook: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     static let shared = QuickLook()

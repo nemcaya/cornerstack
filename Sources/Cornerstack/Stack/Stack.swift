@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import os
-import UniformTypeIdentifiers
 
 let log = Logger(subsystem: "io.github.nemcaya.cornerstack", category: "stack")
 
@@ -16,12 +15,17 @@ struct Shot: Identifiable, Equatable {
     /// Kept on the stack: a drop into an app leaves it there, and new
     /// captures push other cards out first.
     var kept = false
+    /// What a QR code or barcode in the screenshot says, once it was read;
+    /// see `Reader`. The card then shows a button that opens or copies it.
+    var code: String?
     /// A screen recording rather than a screenshot.
     var isRecording: Bool { Cornerstack.isRecording(url) }
+    /// The code, when it is a web link.
+    var link: URL? { code.flatMap(Reading.webLink) }
 
     static func == (a: Shot, b: Shot) -> Bool {
         a.id == b.id && a.falling == b.falling && a.flying == b.flying && a.kept == b.kept
-            && a.thumb === b.thumb
+            && a.code == b.code && a.thumb === b.thumb
     }
 }
 
@@ -48,10 +52,20 @@ final class Stack: ObservableObject {
     /// Whether an empty stack shows its hint: only when it was opened on
     /// purpose, not for the moment the last card leaves.
     @Published var showsHint = false
+    /// Tucked away: the cards slid off the edge of the screen, and a small
+    /// tab shows how many wait there. See `TuckAway`.
+    @Published var isTucked = false
+    /// Whether tucking away and coming back slide. A new capture brings the
+    /// cards back at once, so it can fly straight to its place.
+    @Published var tuckSlides = true
 
     /// Card frames in window coordinates, reported by the views. The panel
     /// uses them to only catch clicks over cards and let the rest through.
     var hitRects: [UUID: CGRect] = [:] {
+        didSet { onLayout?() }
+    }
+    /// Where the tab of a tucked stack is, in the same coordinates.
+    var tabRect: CGRect? {
         didSet { onLayout?() }
     }
     /// Called when the cards moved, so the panel can check again which
@@ -97,7 +111,26 @@ final class Stack: ObservableObject {
         trimToCapacity(sparing: item.id)
         save()
         play("Tink", volume: 0.35)
+        read(item)
+        History.record(url)
         return item.id
+    }
+
+    /// Reads the capture in the background, so its text is ready and a QR
+    /// code shows its button. Recordings are left alone.
+    private func read(_ item: Shot) {
+        guard !item.isRecording else { return }
+        let url = item.url
+        Reader.shared.read(url) { [weak self] reading in
+            guard let self, let i = self.items.firstIndex(where: { $0.url == url && !$0.falling }) else { return }
+            let code = reading.code
+            if self.items[i].code != code { self.items[i].code = code }
+        }
+    }
+
+    /// Whether this file is on the stack now.
+    func contains(_ url: URL) -> Bool {
+        items.contains { $0.url == url && !$0.falling }
     }
 
     /// Whether a file with this name has been on the stack since launch.
@@ -161,28 +194,100 @@ final class Stack: ObservableObject {
 
     func copy(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
-        let entry = NSPasteboardItem()
-        // A recording is copied as the file, which apps paste as the video.
-        if !item.isRecording, let png = pngData(item.url) { entry.setData(png, forType: .png) }
-        entry.setString(item.url.absoluteString, forType: .fileURL)
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.writeObjects([entry])
+        Copying.copy(item.url)
         flash(L("Copied"), on: id)
     }
 
-    /// The text in a screenshot, read on this Mac. See `TextRecognition`.
-    func copyText(_ id: UUID) {
+    /// Half the size of a Retina screenshot, as it looked on screen; see
+    /// `Copying.copyAtOneX`.
+    func copyAtOneX(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
-        TextRecognition.text(in: item.url) { [weak self] text in
+        guard !item.isRecording else {
+            NSSound.beep()
+            return
+        }
+        switch Copying.copyAtOneX(item.url) {
+        case .scaled: flash(L("Copied at 1x"), on: id)
+        case .alreadyOneX: flash(L("Copied, already 1x"), on: id)
+        case .failed: NSSound.beep()
+        }
+    }
+
+    /// The text in a screenshot, read on this Mac, with what a QR code in it
+    /// says at the end. Usually read already, when the card landed; see `Reader`.
+    func copyText(_ id: UUID) {
+        guard let item = items.first(where: { $0.id == id }), !item.isRecording else { return }
+        Reader.shared.read(item.url) { [weak self] reading in
             guard let self else { return }
-            guard let text else {
+            guard let text = reading.text else {
                 self.flash(L("No text found"), symbol: "text.magnifyingglass", on: id)
                 return
             }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             self.flash(L("Copied text"), on: id)
+        }
+    }
+
+    /// The button for a card's QR code or barcode: a web link opens in the
+    /// browser, anything else a code says is copied.
+    func useCode(_ id: UUID) {
+        guard let item = items.first(where: { $0.id == id }) else { return }
+        guard let code = item.code else {
+            flash(L("No code found"), symbol: "qrcode", on: id)
+            return
+        }
+        if let link = item.link {
+            NSWorkspace.shared.open(link)
+            flash(L("Opened link"), symbol: "arrow.up.right", on: id)
+        } else {
+            copyCode(id, code: code)
+        }
+    }
+
+    func copyCode(_ id: UUID) {
+        guard let code = items.first(where: { $0.id == id })?.code else { return }
+        copyCode(id, code: code)
+    }
+
+    private func copyCode(_ id: UUID, code: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(code, forType: .string)
+        flash(items.first(where: { $0.id == id })?.link != nil ? L("Copied link") : L("Copied code"), on: id)
+    }
+
+    /// A copy of the screenshot with its keys, tokens, passwords, email
+    /// addresses, card numbers and IBANs painted over lands on the stack as
+    /// the newest card. The original stays as it is. See `Secrets`.
+    func hideSecrets(_ id: UUID) {
+        guard let item = items.first(where: { $0.id == id }), !item.isRecording else { return }
+        let url = item.url
+        Reader.shared.read(url) { [weak self] reading in
+            guard let self else { return }
+            let boxes = Secrets.find(in: reading)
+            guard !boxes.isEmpty else {
+                self.flash(L("No secrets found"), symbol: "checkmark.shield", on: id)
+                return
+            }
+            try? FileManager.default.createDirectory(at: Inbox.folder, withIntermediateDirectories: true)
+            let base = (url.lastPathComponent as NSString).deletingPathExtension
+            let target = self.uniqueURL(in: Inbox.folder, for: base + " " + L("(secrets hidden)") + ".png")
+            DispatchQueue.global(qos: .userInitiated).async {
+                let thumb = Secrets.paint(boxes, over: url, to: target) ? makeThumbnail(target) : nil
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        // In inbox mode the folder watcher may have put the
+                        // copy on the stack first; that is fine too.
+                        let existing = self.items.first { $0.url == target && !$0.falling }?.id
+                        guard let thumb, let newID = existing ?? self.add(target, thumb: thumb) else {
+                            log.error("Could not hide the secrets in \(url.lastPathComponent, privacy: .public)")
+                            NSSound.beep()
+                            return
+                        }
+                        self.flash(L("Secrets hidden"), symbol: "eye.slash", on: newID)
+                    }
+                }
+            }
         }
     }
 
@@ -321,6 +426,10 @@ final class Stack: ObservableObject {
         guard let i = items.firstIndex(where: { $0.url == url && !$0.falling }),
               let thumb = makeThumbnail(url) else { return }
         items[i].thumb = thumb
+        // What it says may have changed too.
+        Reader.shared.forget(url)
+        items[i].code = nil
+        read(items[i])
     }
 
     func showInFinder(_ id: UUID) {
@@ -370,6 +479,8 @@ final class Stack: ObservableObject {
             item.kept = kept.contains(path)
             items.append(item)
             seenNames.insert(url.lastPathComponent)
+            read(item)
+            History.record(url, onlyIfNew: true)
         }
     }
 
@@ -387,17 +498,5 @@ final class Stack: ObservableObject {
         guard soundOn, let sound = NSSound(named: name)?.copy() as? NSSound else { return }
         sound.volume = volume
         sound.play()
-    }
-
-    /// A PNG file goes on the clipboard as it is; any other image is
-    /// converted straight from the file, keeping its resolution and colours.
-    private func pngData(_ url: URL) -> Data? {
-        if url.pathExtension.lowercased() == "png" { return try? Data(contentsOf: url) }
-        let data = NSMutableData()
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)
-        else { return nil }
-        CGImageDestinationAddImageFromSource(destination, source, 0, nil)
-        return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 }

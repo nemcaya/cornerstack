@@ -72,6 +72,14 @@ struct ShotView: View {
                 // the time; any other card on hover.
                 cornerButton(item.kept ? "pin.fill" : "pin", visible: item.kept || (hovering && !dragging))
             }
+            .overlay(alignment: .bottomLeading) {
+                // A QR code or barcode in the screenshot: open its link, or
+                // copy what it says. Shown all the time, so you see there is one.
+                if item.code != nil {
+                    cornerButton("qrcode", visible: !dragging)
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
+            }
             .overlay(GrabArea(item: item, stack: stack))
             .overlay {
                 if let badge {
@@ -88,6 +96,7 @@ struct ShotView: View {
             .animation(.easeOut(duration: 0.18), value: hovering)
             .animation(.easeOut(duration: 0.2), value: badge)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: item.kept)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: item.code)
             .onHover { hovering = $0 }
             .background(
                 GeometryReader { g in

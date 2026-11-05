@@ -10,9 +10,11 @@ import SwiftUI
 /// - The Trash takes the file.
 /// - Nowhere that accepts it: the card flies back to the stack.
 ///
-/// Click copies, Option-click copies the path, press and hold opens Markup,
+/// Click copies, Shift-click copies at 1x, Option-click copies the path,
+/// press and hold opens Markup,
 /// a force click opens Quick Look. The cross in the top left corner takes the
-/// card off the stack; the pin in the top right keeps it there.
+/// card off the stack; the pin in the top right keeps it there. A card with a
+/// QR code has a button in its bottom left corner that opens or copies it.
 struct GrabArea: NSViewRepresentable {
     let item: Shot
     let stack: Stack
@@ -34,9 +36,15 @@ struct GrabArea: NSViewRepresentable {
         view.url = item.url
         view.dragImage = item.thumb
         view.kept = item.kept
+        view.hasCode = item.code != nil
         let kept = item.kept
+        let url = item.url
+        let code = item.code
+        let link = item.link
         view.onClick = { stack.copy(id) }
+        view.onCode = { stack.useCode(id) }
         view.onOptionClick = { stack.copyPath(id) }
+        view.onShiftClick = { stack.copyAtOneX(id) }
         view.onDoubleClick = { stack.open(id) }
         view.onForceClick = { stack.quickLook(id) }
         view.onDragStart = { stack.draggingID = id }
@@ -51,13 +59,29 @@ struct GrabArea: NSViewRepresentable {
         view.onTogglePin = { stack.toggleKeep(id) }
         view.onLongPress = { stack.markup(id) }
         view.onPressChange = { pressed in stack.pressedID = pressed ? id : nil }
-        view.menuProvider = {
+        view.menuProvider = { [weak view] in
             let menu = NSMenu()
             menu.addItem(ClosureMenuItem(L("Copy")) { stack.copy(id) })
             if !isRecording {
+                menu.addItem(ClosureMenuItem(L("Copy at 1x")) { stack.copyAtOneX(id) })
                 menu.addItem(ClosureMenuItem(L("Copy Text")) { stack.copyText(id) })
             }
             menu.addItem(ClosureMenuItem(L("Copy Path")) { stack.copyPath(id) })
+            // The link names its site, so you know where it goes before it opens.
+            if let link {
+                menu.addItem(ClosureMenuItem(L("Open Link") + " (\(link.host ?? link.absoluteString))") { stack.useCode(id) })
+                menu.addItem(ClosureMenuItem(L("Copy Link")) { stack.copyCode(id) })
+            } else if code != nil {
+                menu.addItem(ClosureMenuItem(L("Copy Code")) { stack.copyCode(id) })
+            }
+            menu.addItem(.separator())
+            // AirDrop, Messages, Mail and the rest of the system's share menu.
+            let picker = NSSharingServicePicker(items: [url])
+            view?.sharePicker = picker
+            menu.addItem(picker.standardShareMenuItem)
+            if !isRecording {
+                menu.addItem(ClosureMenuItem(L("Hide Secrets")) { stack.hideSecrets(id) })
+            }
             menu.addItem(.separator())
             menu.addItem(ClosureMenuItem(L("Open")) { stack.open(id) })
             menu.addItem(ClosureMenuItem(L("Quick Look")) { stack.quickLook(id) })
@@ -85,8 +109,14 @@ final class GrabView: NSView, NSDraggingSource {
     var dragImage: NSImage?
     /// A kept card has no cross: its top left corner doesn't remove it.
     var kept = false
+    /// A card with a QR code or barcode has its button in the bottom left corner.
+    var hasCode = false
+    /// The share menu's picker, kept while its menu item is on screen.
+    var sharePicker: NSSharingServicePicker?
     var onClick: () -> Void = {}
+    var onCode: () -> Void = {}
     var onOptionClick: () -> Void = {}
+    var onShiftClick: () -> Void = {}
     var onDoubleClick: () -> Void = {}
     var onForceClick: () -> Void = {}
     var onDragStart: () -> Void = {}
@@ -100,6 +130,9 @@ final class GrabView: NSView, NSDraggingSource {
     var menuProvider: () -> NSMenu = { NSMenu() }
 
     private var downPoint: NSPoint?
+    /// The code button was pressed; it acts when let go over it, so a drag
+    /// that starts in that corner never opens a link.
+    private var pressedCode = false
     private var startedDrag = false
     private var holdTimer: Timer?
     private var didLongPress = false
@@ -110,18 +143,24 @@ final class GrabView: NSView, NSDraggingSource {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    /// The cross and the pin drawn in the top corners of the card. They are
-    /// handled here because this view sits on top of the SwiftUI card.
+    /// The cross and the pin drawn in the top corners of the card, and the
+    /// code button in the bottom left. They are handled here because this
+    /// view sits on top of the SwiftUI card.
     static let cornerHitSize: CGFloat = 26
 
-    private enum Corner { case left, right }
+    private enum Corner { case left, right, bottomLeft }
 
     private func corner(of event: NSEvent) -> Corner? {
         let p = convert(event.locationInWindow, from: nil)
-        let y = isFlipped ? 0 : bounds.height - Self.cornerHitSize
         let size = Self.cornerHitSize
-        if NSRect(x: 0, y: y, width: size, height: size).contains(p) { return .left }
-        if NSRect(x: bounds.width - size, y: y, width: size, height: size).contains(p) { return .right }
+        let top = isFlipped ? 0 : bounds.height - size
+        let bottom = isFlipped ? bounds.height - size : 0
+        // On a card less than two buttons tall the cross and the code button
+        // overlap: the half of the card that was clicked decides.
+        let upperHalf = isFlipped ? p.y < bounds.midY : p.y >= bounds.midY
+        if upperHalf, NSRect(x: 0, y: top, width: size, height: size).contains(p) { return .left }
+        if upperHalf, NSRect(x: bounds.width - size, y: top, width: size, height: size).contains(p) { return .right }
+        if !upperHalf, NSRect(x: 0, y: bottom, width: size, height: size).contains(p) { return .bottomLeft }
         return nil
     }
 
@@ -134,6 +173,10 @@ final class GrabView: NSView, NSDraggingSource {
         case .right?:
             downPoint = nil
             onTogglePin()
+            return
+        case .bottomLeft? where hasCode:
+            downPoint = nil
+            pressedCode = true
             return
         default:
             break
@@ -190,9 +233,20 @@ final class GrabView: NSView, NSDraggingSource {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if pressedCode {
+            pressedCode = false
+            if corner(of: event) == .bottomLeft && event.clickCount == 1 { onCode() }
+            return
+        }
         endPress()
         if downPoint != nil && !startedDrag && !didLongPress && event.clickCount == 1 {
-            if event.modifierFlags.contains(.option) { onOptionClick() } else { onClick() }
+            if event.modifierFlags.contains(.option) {
+                onOptionClick()
+            } else if event.modifierFlags.contains(.shift) {
+                onShiftClick()
+            } else {
+                onClick()
+            }
         }
         downPoint = nil
         didLongPress = false

@@ -43,3 +43,18 @@ if [ -n "$IDENTITY" ]; then
     echo "No notary credentials in profile $PROFILE: the image is signed but not notarized."
   fi
 fi
+
+# Keep the Homebrew cask in step: new version and the checksum of this image.
+# Set TAP_DIR to the checkout of github.com/nemcaya/homebrew-tap. Nothing is
+# committed or pushed here, so the cask never points at a release that is not
+# on GitHub yet. (The same step as in Tendedero's script.)
+TAP_DIR="${TAP_DIR:-$HOME/Code/homebrew-tap}"
+CASK="$TAP_DIR/Casks/cornerstack.rb"
+if [ -f "$CASK" ]; then
+  SHA="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+  sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/; s/^  sha256 \".*\"/  sha256 \"$SHA\"/" "$CASK"
+  echo "Updated $CASK to $VERSION ($SHA)"
+  echo "After publishing the release: commit and push the tap."
+else
+  echo "No Homebrew cask at $CASK, skipped."
+fi
