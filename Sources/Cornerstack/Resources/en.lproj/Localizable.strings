@@ -89,6 +89,7 @@
 "Copied code" = "Copied code";
 "No secrets found" = "No secrets found";
 "Secrets hidden" = "Secrets hidden";
+"Could not read it" = "Could not read it";
 "(secrets hidden)" = "(secrets hidden)";
 
 /* Shortcuts */

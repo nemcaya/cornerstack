@@ -9,10 +9,27 @@ enum Copying {
     static let ownType = NSPasteboard.PasteboardType("io.github.nemcaya.cornerstack.copy")
 
     /// The image and the file. A recording is copied as the file only, which
-    /// apps paste as the video.
-    static func copy(_ url: URL) {
+    /// apps paste as the video. `then` runs on the main thread once it is on
+    /// the clipboard: at once for a PNG, which goes as it is, and a moment
+    /// later for any other image, which is converted off the main thread.
+    static func copy(_ url: URL, then: @escaping @MainActor () -> Void = {}) {
+        guard !isRecording(url), url.pathExtension.lowercased() != "png" else {
+            write(url, png: isRecording(url) ? nil : pngData(url))
+            MainActor.assumeIsolated { then() }
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let png = pngData(url)
+            DispatchQueue.main.async {
+                write(url, png: png)
+                MainActor.assumeIsolated { then() }
+            }
+        }
+    }
+
+    private static func write(_ url: URL, png: Data?) {
         let entry = NSPasteboardItem()
-        if !isRecording(url), let png = pngData(url) { entry.setData(png, forType: .png) }
+        if let png { entry.setData(png, forType: .png) }
         entry.setString(url.absoluteString, forType: .fileURL)
         entry.setData(Data(), forType: ownType)
         let pb = NSPasteboard.general
@@ -28,21 +45,28 @@ enum Copying {
     /// four times the pixels to send (and, for an AI chat, to pay for). This
     /// copies it at half the width and height. The file itself stays as it is
     /// and is not put on the clipboard, or apps would paste that instead.
-    static func copyAtOneX(_ url: URL) -> Result {
-        switch oneX(url) {
-        case .png(let data):
-            let entry = NSPasteboardItem()
-            entry.setData(data, forType: .png)
-            entry.setData(Data(), forType: ownType)
-            let pb = NSPasteboard.general
-            pb.clearContents()
-            pb.writeObjects([entry])
-            return .scaled
-        case .alreadyOneX:
-            copy(url)
-            return .alreadyOneX
-        case .failed:
-            return .failed
+    /// The smaller image is made off the main thread; `then` runs on it.
+    static func copyAtOneX(_ url: URL, then: @escaping @MainActor (Result) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let made = oneX(url)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    switch made {
+                    case .png(let data):
+                        let entry = NSPasteboardItem()
+                        entry.setData(data, forType: .png)
+                        entry.setData(Data(), forType: ownType)
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.writeObjects([entry])
+                        then(.scaled)
+                    case .alreadyOneX:
+                        copy(url) { then(.alreadyOneX) }
+                    case .failed:
+                        then(.failed)
+                    }
+                }
+            }
         }
     }
 

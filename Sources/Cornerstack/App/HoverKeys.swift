@@ -11,7 +11,8 @@ import Carbon
 /// card, and they let go:
 /// - after a key or a click on a card, until the pointer moves again: you
 ///   click a card, paste it into a chat and type without the letters going
-///   to the card;
+///   to the card. The key that was pressed stays taken until it is let go,
+///   so holding it down doesn't type into the app behind;
 /// - when the pointer has rested for a few seconds, in case you start typing
 ///   with it parked on the stack.
 /// Turn them off in Settings.
@@ -64,7 +65,15 @@ final class HoverKeys {
     /// What a key does to a card; set by AppDelegate.
     var perform: (Key, UUID) -> Void = { _, _ in }
 
-    private var hotKeys: [HotKey] = []
+    private var hotKeys: [Key: HotKey] = [:]
+    /// The key that just acted and is still down. Letting go of its hot key
+    /// while it is held would send its repeats to the app you are typing in:
+    /// a held Delete would remove the card and then your text.
+    private var held: HotKey?
+    private var heldTimer: Timer?
+    /// The longest a key stays taken after it acted, however the keyboard
+    /// says it is doing: a key must never be lost to typing for good.
+    private static let heldLimit: TimeInterval = 30
     private var card: UUID?
     /// Where the pointer was when the keys paused, after a key or a click.
     /// They come back once it moves away from there.
@@ -112,14 +121,16 @@ final class HoverKeys {
         if on { watchRest() }
         guard on == hotKeys.isEmpty else { return }
         if on {
-            hotKeys = Key.allCases.compactMap { key in
-                HotKey(Shortcut(keyCode: key.keyCode, modifiers: 0, key: key.name)) { [weak self] in
-                    self?.pressed(key)
-                }
+            // A key still held from before is taken again with the others.
+            release()
+            for key in Key.allCases {
+                hotKeys[key] = HotKey(Shortcut(keyCode: key.keyCode, modifiers: 0, key: key.name),
+                                      action: { [weak self] in self?.pressed(key) },
+                                      released: { [weak self] in self?.release() })
             }
         } else {
             // Letting go of a hot key unregisters it.
-            hotKeys = []
+            hotKeys = [:]
             restTimer?.invalidate()
             restTimer = nil
         }
@@ -127,10 +138,36 @@ final class HoverKeys {
 
     private func pressed(_ key: Key) {
         guard !hotKeys.isEmpty, let card else { return }
-        // Keeping a card is safe to repeat; anything else pauses the keys,
-        // so typing that starts right after can't go to the card.
-        if key != .keep { pause() }
+        // Every key pauses the keys, so typing that starts right after can't
+        // go to the card. The key itself stays taken while it is down.
+        hold(hotKeys.removeValue(forKey: key), code: key.keyCode)
+        pause()
         perform(key, card)
+    }
+
+    private func hold(_ key: HotKey?, code: Int) {
+        release()
+        held = key
+        guard key != nil else { return }
+        // Its release normally says when it is let go. In case that never
+        // arrives, the keyboard is asked twice a second whether the key is
+        // still down, which needs no permission.
+        let since = Date()
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                let down = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(code))
+                if !down || Date().timeIntervalSince(since) > Self.heldLimit { self?.release() }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        heldTimer = timer
+    }
+
+    /// The held key was let go, or was held long enough: it is free again.
+    private func release() {
+        heldTimer?.invalidate()
+        heldTimer = nil
+        held = nil
     }
 
     /// One timer at a time: when it fires before the pointer has rested long

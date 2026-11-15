@@ -121,7 +121,16 @@ final class Markup: NSObject, NSSharingServiceDelegate {
         guard let destination = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else {
             return nil
         }
-        CGImageDestinationAddImage(destination, cg, nil)
+        // The file's pixel density goes into the new version, so a Retina
+        // screenshot still pastes at the size it had on screen.
+        var properties: [CFString: Any] = [:]
+        if let source = CGImageSourceCreateWithURL(target as CFURL, nil),
+           let original = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
+            for key in [kCGImagePropertyDPIWidth, kCGImagePropertyDPIHeight] {
+                if let value = original[key] { properties[key] = value }
+            }
+        }
+        CGImageDestinationAddImage(destination, cg, properties as CFDictionary)
         return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 }

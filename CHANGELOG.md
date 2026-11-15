@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.1 (2026-11-15)
+
+- Copy Text and Hide Secrets no longer return letters from the wrong alphabet. Apple's text recognition sometimes reads monospaced text, like a key in a terminal, as Cyrillic or Greek letters that look the same (a Cyrillic О for an O). A copied key then didn't work, and Hide Secrets could miss it. Those letters are now put back in words that mix them with Latin letters, and a Ø, × or ı in the middle of a key becomes 0, x or i. A word written only in Cyrillic or Greek stays as it is. If one of them is among your Mac's languages, a word only changes when the alphabets are mixed inside one run of letters, so "НАТО/NATO" stays too. Text recognition can still take an O for a 0 or an l for a 1, so check a copied key.
+- Hide Secrets finds more: values after any name that ends in key, token or secret, like ENCRYPTION_KEY or "accessToken", and card numbers in which a 1 was read as an l. A QR code or barcode that holds a secret, like the setup code of an authenticator app or a Wi-Fi password, is covered whole. On a photo that is stored turned on its side the bars now land on the text.
+- The 30 days a capture stays in Cornerstack's folder count from when it left the stack. Before, they counted from when it was taken, so a card that had been on the stack for a month went to the Trash soon after it left.
+- Handle screenshots puts your screenshot folder back when it is in iCloud Drive, Dropbox, OneDrive or Google Drive. Before, quitting left your screenshots going to the Desktop.
+- With Handle screenshots on, captures taken while Cornerstack was not running, after a force quit or a power cut, land on the stack the next time it opens: the newest five, and the rest are in History.
+- Pick another folder in the Options of ⌘⇧5 and Cornerstack follows it the next time you switch apps or Spaces. Before, it needed a restart. With Handle screenshots on, Cornerstack's own folder is set again the next time it starts.
+- ⌘W closes Settings and History, and ⌘, ⌘Y and ⌘Q work while one of them is in front. When the last window closes, the app you were in is active again.
+- Keys over a card: the key you press stays taken for as long as you hold it, up to half a minute, so a held ⌫ doesn't go on to delete text in the app behind. P pauses the keys like every other key, and they let go when you switch apps.
+- When an image can't be read, the card says so instead of "No secrets found". When its file is gone, the card leaves instead of saying "Copied". Save to Desktop keeps the capture in History. A capture that another tool is still writing gets its finished image.
+- Lighter: Copy at 1x no longer holds up the stack while it scales, Copy Text and Hide Secrets go ahead of captures still waiting to be read, and History lets go of its images when you close it.
+
 ## 1.2.0 (2026-11-05)
 
 - Tuck away: left alone for 10 seconds, the stack slides off the edge of the screen into a small tab just above the corner that shows how many cards wait there. Point at the tab, take a screenshot or press ⌥⌘T to bring it back. Nothing leaves the stack. Choose 5, 10 or 30 seconds, or never, in Settings.

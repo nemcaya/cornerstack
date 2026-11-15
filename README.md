@@ -37,7 +37,7 @@ it's back.
 | Click | Copy the image. |
 | <kbd>⇧</kbd> click | Copy it at 1x: half the size of a Retina screenshot, as big as it looked on screen. |
 | <kbd>⌥</kbd> click | Copy the file's path, quoted and ready to paste into a terminal. |
-| Press and hold | Open it in Markup. Screen recordings open in a trimmer. |
+| Press and hold | Open it in Markup. A screen recording, which lands on the stack while Cornerstack handles your screenshots, opens in a trimmer. |
 | Double click | Open it in its default app. |
 | Force click on a trackpad | Open it in Quick Look. The left and right arrow keys step through the stack; Space or Escape closes it. |
 | Drag into an app | Send a copy. It leaves the stack unless it is kept, and the file stays on disk. |
@@ -65,9 +65,9 @@ it's back.
 - **Copied images too.** Switch on *Add copied images* in Settings and images you copy join the stack. Only images: anything copied along with text or a file, and anything a password manager marks as private, is left alone.
 - **Tucks away.** Left alone for 10 seconds, the cards slide off the edge of the screen and a small tab just above the corner shows how many wait there. The tab stays clear of the corner itself, so a Hot Corner there (Quick Note, by default) still works. Choose 5, 10 or 30 seconds, or never, in Settings.
 - **Keys over a card.** Point at a card and press one key, no clicking: <kbd>C</kbd>, <kbd>1</kbd>, <kbd>T</kbd>, <kbd>S</kbd>, <kbd>R</kbd>, <kbd>L</kbd>, <kbd>P</kbd>, <kbd>Space</kbd> or <kbd>⌫</kbd>. The keys only work while the pointer is on a card, and pause after a key or a click until the pointer moves again, so what you type next goes to the app you are in. Turn them off in Settings.
-- **Text from images.** *Copy Text* copies the text in a screenshot, exactly as it is on screen, so code, links and keys survive. Apple's Vision framework reads each capture on your Mac, without the internet, as soon as it lands, so the text is ready when you ask.
+- **Text from images.** *Copy Text* copies the text in a screenshot as it is on screen, without turning code, links and keys into words. Apple's Vision framework reads each capture on your Mac, without the internet, as soon as it lands, so the text is ready when you ask. It can still take one character for another that looks like it, an O for a 0 or an l for a 1, so check a key before you rely on it.
 - **QR codes.** A screenshot with a QR code or barcode gets a button in its bottom left corner: it opens the link, or copies what the code says. The card's menu names the site before you open it.
-- **Hide secrets.** *Hide Secrets* adds a copy of the screenshot with API keys, tokens, passwords, email addresses, card numbers and IBANs painted over with solid bars, ready to paste into a chat or an issue. The original stays as it is. It goes by what the text looks like, so check the copy before you share it.
+- **Hide secrets.** *Hide Secrets* adds a copy of the screenshot with API keys, tokens, passwords, email addresses, card numbers and IBANs painted over with solid bars, ready to paste into a chat or an issue. A QR code that holds a secret, like the setup code of an authenticator app or a Wi-Fi password, is covered too. The original stays as it is. It goes by what the text looks like, so check the copy before you share it.
 - **Share.** AirDrop, Messages, Mail and the rest of the share menu, from a card's menu or with <kbd>S</kbd>.
 - **Copy at 1x.** A Retina screenshot has two pixels for every point, so it pastes twice as big as it looked, with four times the pixels to upload (and for an AI chat, to pay for). *Copy at 1x*, <kbd>⇧</kbd>-click or <kbd>1</kbd> copies it at the size it had on screen. The file stays as it is.
 - **History.** Menu bar icon › *History…* shows every capture of the last 30 days that was on the stack, by day. Drag one into any app, double click it to put it back on the stack, or right click to copy it, read its text or move it to the Trash.

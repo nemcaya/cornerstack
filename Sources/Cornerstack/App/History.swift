@@ -32,6 +32,11 @@ enum History {
         UserDefaults.standard.set(saved, forKey: key)
     }
 
+    /// The paths of the captures remembered as having been on the stack.
+    static func recorded() -> Set<String> {
+        Set((UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]).keys)
+    }
+
     /// Every capture to list, newest first: what is in Cornerstack's folder
     /// and what was remembered elsewhere, if its file is still there. Reads
     /// the disk, so call it off the main thread.
@@ -62,7 +67,7 @@ enum History {
 
     private static let extensions: Set<String> = ["png", "jpg", "jpeg", "heic", "tif", "tiff", "gif", "webp", "mov", "mp4"]
 
-    private static func isCapture(_ url: URL) -> Bool {
+    static func isCapture(_ url: URL) -> Bool {
         extensions.contains(url.pathExtension.lowercased())
     }
 }
@@ -193,22 +198,28 @@ final class HistoryModel: ObservableObject {
 
     func copy(_ entry: HistoryEntry) {
         guard exists(entry) else { return }
-        Copying.copy(entry.url)
-        flash(L("Copied"), on: entry)
+        Copying.copy(entry.url) { [weak self] in self?.flash(L("Copied"), on: entry) }
     }
 
     func copyAtOneX(_ entry: HistoryEntry) {
         guard exists(entry) else { return }
-        switch Copying.copyAtOneX(entry.url) {
-        case .scaled: flash(L("Copied at 1x"), on: entry)
-        case .alreadyOneX: flash(L("Copied, already 1x"), on: entry)
-        case .failed: NSSound.beep()
+        Copying.copyAtOneX(entry.url) { [weak self] result in
+            switch result {
+            case .scaled: self?.flash(L("Copied at 1x"), on: entry)
+            case .alreadyOneX: self?.flash(L("Copied, already 1x"), on: entry)
+            case .failed: NSSound.beep()
+            }
         }
     }
 
     func copyText(_ entry: HistoryEntry) {
         guard exists(entry) else { return }
         Reader.shared.read(entry.url) { [weak self] reading in
+            guard !reading.failed else {
+                NSSound.beep()
+                self?.flash(L("Could not read it"), on: entry)
+                return
+            }
             guard let text = reading.text else {
                 self?.flash(L("No text found"), on: entry)
                 return
@@ -375,6 +386,11 @@ final class HistoryThumbnails {
         return cache
     }()
 
+    /// The window closed: its images are not needed until it opens again.
+    func clear() {
+        cache.removeAllObjects()
+    }
+
     func image(for entry: HistoryEntry) async -> NSImage? {
         // A file saved over, by Markup for example, gets a new thumbnail.
         let key = "\(entry.url.path)|\(entry.modified?.timeIntervalSince1970 ?? 0)" as NSString
@@ -418,5 +434,16 @@ final class HistoryWindow: NSObject, NSWindowDelegate {
     /// Back from the Dock: files may have come and gone meanwhile.
     func windowDidDeminiaturize(_ notification: Notification) {
         model?.reload()
+    }
+
+    /// A closed window lets go of its images: the cache, and the window
+    /// itself with the ones its cells hold. It is made again when you open
+    /// History, at the place you left it.
+    func windowWillClose(_ notification: Notification) {
+        HistoryThumbnails.shared.clear()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window?.isVisible == false else { return }
+            self.window = nil
+        }
     }
 }

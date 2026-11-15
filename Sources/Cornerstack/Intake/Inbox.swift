@@ -69,15 +69,21 @@ enum Inbox {
         set { UserDefaults.standard.set(newValue, forKey: offeredKey) }
     }
 
-    static func apply() {
+    /// Returns true when the app ended last time without putting the
+    /// settings back (killed, or the Mac lost power): macOS may have saved
+    /// captures to the folder since, with nobody watching.
+    @discardableResult
+    static func apply() -> Bool {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         // The user's settings are saved once. If they are still saved, the
         // app ended without putting them back, and what macOS has now are
         // our own values.
-        if UserDefaults.standard.dictionary(forKey: savedKey) == nil {
+        let endedWithoutRestoring = UserDefaults.standard.dictionary(forKey: savedKey) != nil
+        if !endedWithoutRestoring {
             UserDefaults.standard.set(currentSettings(), forKey: savedKey)
         }
         for setting in settings { set(setting.key, setting.value) }
+        return endedWithoutRestoring
     }
 
     /// Puts back every setting that still has the value inbox mode gave it.
@@ -92,11 +98,14 @@ enum Inbox {
     /// The settings as they are now, by the names they are saved under. A
     /// missing key is left out and comes back as the macOS default.
     private static func currentSettings() -> [String: Any] {
-        // Screenshots going to a folder inside ~/Library belong to another
-        // app that took them over, like the app this one grew out of. That
-        // app is not around to empty its folder later, so the macOS defaults
-        // are what comes back instead of its settings.
-        let library = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library").path + "/"
+        // Screenshots going to a folder inside ~/Library/Application Support
+        // belong to another app that took them over, like the app this one
+        // grew out of. That app is not around to empty its folder later, so
+        // the macOS defaults are what comes back instead of its settings.
+        // The rest of ~/Library is the user's own choice: iCloud Drive and
+        // Dropbox, OneDrive and Google Drive keep their folders there.
+        let library = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support").path + "/"
         let location = (value("location-screenshot") ?? value("location")) as? String
         if let location, (location as NSString).expandingTildeInPath.hasPrefix(library) { return [:] }
 

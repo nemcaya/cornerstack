@@ -6,7 +6,8 @@ import Vision
 
 /// Hide Secrets: finds keys, tokens, passwords, email addresses, card numbers
 /// and IBANs in what `Reader` read, and paints over them in a copy of the
-/// screenshot. The original stays as it is.
+/// screenshot. A QR code or barcode that holds one is covered whole. The
+/// original stays as it is.
 ///
 /// It goes by what the text looks like, so it is a safety net, not a
 /// guarantee: text it could not read, or a secret in an unknown format,
@@ -47,6 +48,11 @@ enum Secrets {
         // A value after a word that says it is secret: password: hunter2,
         // DB_PASSWORD=…, "token": "…", and the German Passwort and Kennwort.
         Rule(#"(?i)(?:\b|_)(?:pass(?:word|wd)?|passwort|kennwort|pwd|passcode|pin|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth)\b["']?\s*[:=]\s*["']?([^\s"',;]{4,})"#, group: 1),
+        // Any other name that ends in key, token or secret: ENCRYPTION_KEY=…,
+        // STRIPE_SECRET_KEY=…, "accessToken": "…". The value's own shape may
+        // not be known, or one misread character may have spoiled it. Eight
+        // characters and up, so "sort_key: name" stays.
+        Rule(#"(?i)\b[A-Za-z0-9_\-]*(?:key|token|secret)["']?\s*[:=]\s*["']?([^\s"',;]{8,})"#, group: 1),
         // A card's security code: CVC 123, CVV: 1234.
         Rule(#"(?i)\b(?:cvc|cvv|csc|cvc2|cvv2)\b\s*[:=]?\s*(\d{3,4})\b"#, group: 1),
         // The password in a link like https://user:password@host
@@ -55,8 +61,9 @@ enum Secrets {
         Rule(#"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"#),
         // IBANs, checked with their own check digits.
         Rule(#"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?\b"#, check: isIBAN),
-        // Card numbers, checked with the Luhn formula that every card number passes.
-        Rule(#"\b(?:\d[ \-]?){12,18}\d\b"#, check: passesLuhn),
+        // Card numbers, checked with the Luhn formula that every card number
+        // passes. A 1 or a 0 is sometimes read as l, I or O.
+        Rule(#"\b(?:[\dlIO][ \-]?){12,18}[\dlIO]\b"#, check: passesLuhn),
         // Any other long token that mixes letters and digits, like a key in a
         // format not listed above, or the lines of a private key.
         Rule(#"[A-Za-z0-9_\-+/=]{32,}"#, check: looksRandom),
@@ -66,8 +73,10 @@ enum Secrets {
     /// origin at the bottom left of the image.
     static func find(in reading: Reading) -> [CGRect] {
         var boxes: [CGRect] = []
-        for line in reading.lines {
-            let text = line.string
+        for (line, text) in zip(reading.lines, reading.strings) {
+            // `text` has look-alike letters put right; boxes come from Vision's
+            // own string, at the same character positions.
+            let original = line.string
             let all = NSRange(text.startIndex..., in: text)
             var covered: [Range<String.Index>] = []
             for rule in rules {
@@ -81,58 +90,114 @@ enum Secrets {
                     // Already covered by an earlier rule.
                     if covered.contains(where: { $0.overlaps(range) }) { continue }
                     covered.append(range)
-                    if let box = try? line.boundingBox(for: range)?.boundingBox { boxes.append(box) }
+                    let offset = text.distance(from: text.startIndex, to: range.lowerBound)
+                    let length = text.distance(from: range.lowerBound, to: range.upperBound)
+                    guard let start = original.index(original.startIndex, offsetBy: offset, limitedBy: original.endIndex),
+                          let end = original.index(start, offsetBy: length, limitedBy: original.endIndex) else { continue }
+                    if let box = try? line.boundingBox(for: start..<end)?.boundingBox { boxes.append(box) }
                 }
             }
         }
+        // A code that holds a secret is covered whole; any other code stays.
+        for code in reading.codeAreas where isSecret(code.says) { boxes.append(code.box) }
         return boxes
+    }
+
+    /// Whether what a QR code or barcode says is a secret: the setup code of
+    /// an authenticator app, a Wi-Fi code with its password, or anything the
+    /// rules above find in it.
+    private static func isSecret(_ code: String) -> Bool {
+        let lower = code.lowercased()
+        if lower.hasPrefix("otpauth:") || lower.hasPrefix("otpauth-migration:") { return true }
+        if lower.hasPrefix("wifi:"), code.range(of: #"(?i)(?:^wifi:|;)P:[^;]"#, options: .regularExpression) != nil { return true }
+        let all = NSRange(code.startIndex..., in: code)
+        for rule in rules {
+            for match in rule.pattern.matches(in: code, range: all) {
+                guard let range = Range(match.range(at: rule.group), in: code) else { continue }
+                if let check = rule.check {
+                    if longestPassing(check, in: code, range: range) != nil { return true }
+                } else {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     /// Writes a copy of the image with the boxes painted over to `target`, a
     /// PNG. It keeps the original's pixel density, so the copy pastes at the
-    /// same size. False when the image can't be read or written.
-    static func paint(_ boxes: [CGRect], over url: URL, to target: URL) -> Bool {
+    /// same size. Returns the painted image, for the card, or nil when the
+    /// image can't be read or written.
+    static func paint(_ boxes: [CGRect], over url: URL, to target: URL) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return false }
+              let image = upright(source) else { return nil }
         let width = CGFloat(image.width), height = CGFloat(image.height)
         let space = image.colorSpace.flatMap { $0.model == .rgb ? $0 : nil }
             ?? CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         guard let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
                                       bytesPerRow: 0, space: space,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         // Solid bars, not a blur: a blur can sometimes be undone.
         context.setFillColor(CGColor(red: 0.07, green: 0.07, blue: 0.08, alpha: 1))
         for box in boxes {
             let rect = CGRect(x: box.minX * width, y: box.minY * height,
                               width: box.width * width, height: box.height * height)
-            // Vision's boxes for part of a line are estimates: cover a little more.
-            let pad = max(2, rect.height * 0.25)
+            // Vision's boxes for part of a line are estimates: cover a little
+            // more, but not much more around something as tall as a QR code.
+            let pad = min(max(2, rect.height * 0.25), 20)
             let bar = rect.insetBy(dx: -pad, dy: -pad * 0.6)
             context.addPath(CGPath(roundedRect: bar, cornerWidth: pad * 0.8, cornerHeight: pad * 0.8, transform: nil))
             context.fillPath()
         }
-        guard let painted = context.makeImage() else { return false }
+        guard let painted = context.makeImage() else { return nil }
 
         // Written under a hidden name, then renamed, so nothing watching the
         // folder sees a half-written file.
         let partial = target.deletingLastPathComponent().appendingPathComponent("." + target.lastPathComponent)
         guard let destination = CGImageDestinationCreateWithURL(partial as CFURL, UTType.png.identifier as CFString, 1, nil)
-        else { return false }
+        else { return nil }
         let original = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
         var properties: [CFString: Any] = [:]
         for key in [kCGImagePropertyDPIWidth, kCGImagePropertyDPIHeight] {
             if let value = original[key] { properties[key] = value }
         }
         CGImageDestinationAddImage(destination, painted, properties as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else { return false }
+        guard CGImageDestinationFinalize(destination) else {
+            try? FileManager.default.removeItem(at: partial)
+            return nil
+        }
         do {
-            try FileManager.default.moveItem(at: partial, to: target)
-            return true
+            let fm = FileManager.default
+            // A copied image is saved for its owner's eyes only; so is its copy.
+            if let mode = try? fm.attributesOfItem(atPath: url.path)[.posixPermissions] {
+                try? fm.setAttributes([.posixPermissions: mode], ofItemAtPath: partial.path)
+            }
+            try fm.moveItem(at: partial, to: target)
+            return painted
         } catch {
             try? FileManager.default.removeItem(at: partial)
-            return false
+            return nil
         }
+    }
+
+    /// The image the way it is shown. A photo can be stored on its side with
+    /// a note to turn it; Vision reads it turned, so the bars have to be
+    /// painted on it turned as well. A screenshot is never turned and is
+    /// used as it is.
+    private static func upright(_ source: CGImageSource) -> CGImage? {
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let orientation = (properties?[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+        guard orientation != 1, let width = properties?[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties?[kCGImagePropertyPixelHeight] as? Int else {
+            return CGImageSourceCreateImageAtIndex(source, 0, nil)
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(width, height),
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
     // MARK: Checks
@@ -168,8 +233,10 @@ enum Secrets {
     }
 
     private static func passesLuhn(_ text: String) -> Bool {
-        let digits = text.compactMap(\.wholeNumberValue)
-        guard (13...19).contains(digits.count) else { return false }
+        // At most three letters read for digits: a row of them is a word.
+        let misread = text.filter { "lIO".contains($0) }.count
+        let digits = text.compactMap { $0 == "O" ? 0 : "lI".contains($0) ? 1 : $0.wholeNumberValue }
+        guard misread <= 3, (13...19).contains(digits.count) else { return false }
         var sum = 0
         for (i, digit) in digits.reversed().enumerated() {
             if i % 2 == 1 {

@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 
 /// Adds images copied to the clipboard, like a screenshot taken with Control
 /// held or an image copied in Preview. Each one is saved as a PNG in
@@ -12,9 +13,10 @@ final class ClipboardWatcher {
     private let onImage: (URL) -> Void
     private var timer: Timer?
     private var lastCount = NSPasteboard.general.changeCount
-    /// The last image saved. Some apps put the same image on the clipboard
-    /// again; it is added once, unless its file has been deleted since.
-    private var last: (png: Data, url: URL)?
+    /// The last image saved, by its hash, so the image itself need not stay
+    /// in memory. Some apps put the same image on the clipboard again; it is
+    /// added once, unless its file has been deleted since.
+    private var last: (hash: SHA256.Digest, url: URL)?
 
     private static let enabledKey = "clipboardEnabled"
 
@@ -75,10 +77,11 @@ final class ClipboardWatcher {
         // Decoding a large image takes a moment, so it happens off the main thread.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let png = ClipboardWatcher.png(from: data, type: type)
+            let hash = png.map { SHA256.hash(data: $0) }
             DispatchQueue.main.async {
                 // Copied over again in the meantime: that copy is the one that counts.
-                guard let png, NSPasteboard.general.changeCount == count else { return }
-                self?.save(png)
+                guard let png, let hash, NSPasteboard.general.changeCount == count else { return }
+                self?.save(png, hash: hash)
             }
         }
     }
@@ -92,8 +95,8 @@ final class ClipboardWatcher {
         return type == .png ? data : rep.representation(using: .png, properties: [:])
     }
 
-    private func save(_ png: Data) {
-        if let last, last.png == png, FileManager.default.fileExists(atPath: last.url.path) { return }
+    private func save(_ png: Data, hash: SHA256.Digest) {
+        if let last, last.hash == hash, FileManager.default.fileExists(atPath: last.url.path) { return }
         let fm = FileManager.default
         var url = Inbox.folder.appendingPathComponent("Clipboard \(Self.stamp()).png")
         var n = 2
@@ -106,7 +109,7 @@ final class ClipboardWatcher {
             try png.write(to: url, options: .atomic)
             // What people copy can be private: only they can read it.
             try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            last = (png, url)
+            last = (hash, url)
             onImage(url)
         } catch {
             try? fm.removeItem(at: url)

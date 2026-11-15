@@ -6,6 +6,12 @@ func isRecording(_ url: URL) -> Bool {
     ["mov", "mp4"].contains(url.pathExtension.lowercased())
 }
 
+/// How big the file is now, to tell later whether it was still being written.
+func fileSize(_ url: URL) -> Int? {
+    // Asked of the file system each time: a URL remembers what it was told.
+    (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue
+}
+
 /// Cards are drawn from an image this many pixels on its long side: twice the
 /// widest card, so every card size stays sharp on a Retina screen, and no
 /// more, since every card keeps its image in memory.
@@ -28,6 +34,12 @@ func loadCapture(_ url: URL, flightPixels: Int?) -> CaptureImages? {
 /// The card's image for a file already on disk, for example after Markup.
 func makeThumbnail(_ url: URL) -> NSImage? {
     decodeImage(url, maxPixels: cardPixels).map(cardImage(from:))
+}
+
+/// The card's image from one that is decoded already, like the copy Hide
+/// Secrets just painted, without reading its file again.
+func makeThumbnail(from image: CGImage) -> NSImage {
+    cardImage(from: image)
 }
 
 /// A smaller image for History's grid. Safe to make off the main thread.

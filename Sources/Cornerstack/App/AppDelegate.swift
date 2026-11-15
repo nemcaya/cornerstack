@@ -14,6 +14,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// ignores the screenshot settings (macOS 27 renamed one), captures keep
     /// landing on the Desktop, and they still land on the stack.
     private var safetyWatcher: ScreenshotWatcher?
+    /// When the screenshot folder was last seen to be the one being watched.
+    private var folderChecked = Date()
+    /// The app that was in front before Cornerstack came forward with one
+    /// of its windows; it gets the keyboard back when the last one closes.
+    private var appBefore: NSRunningApplication?
     private var clipboardWatcher: ClipboardWatcher!
     private var signalSources: [DispatchSourceSignal] = []
     private var hotKeys: [HotKey] = []
@@ -108,8 +113,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Ready to put the screenshot settings back before changing them.
         restoreSettingsOnTermination()
-        if Inbox.isEnabled { Inbox.apply() }
+        let endedWithoutRestoring = Inbox.isEnabled && Inbox.apply()
         startWatcher()
+        if endedWithoutRestoring { landMissedCaptures() }
         stack.sweepInbox()
         let sweep = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.stack.sweepInbox() }
@@ -122,6 +128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         registerShortcuts()
 
         setUpStatusItem()
+        setUpMainMenu()
+        Reader.shared.warmUp()
 
         Markup.shared.onSaved = { [weak self] url in self?.stack.reloadThumbnail(for: url) }
         Trim.shared.onSaved = { [weak self] url in self?.stack.reloadThumbnail(for: url) }
@@ -163,10 +171,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {
             workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    // Another app or Space: what you type next is not for a
+                    // card, even with the pointer still on one.
+                    self?.hoverKeys.stop()
+                    self?.followScreenshotFolder()
                     self?.refresh()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self?.refresh() }
                 }
             }
+        }
+        // With a window of its own open, Cornerstack is the active app. When
+        // the last one closes it would stay active with nothing to type
+        // into, and keep checking the pointer 30 times a second.
+        workspace.addObserver(forName: NSWorkspace.didDeactivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            MainActor.assumeIsolated {
+                if let app, app != .current { self?.appBefore = app }
+            }
+        }
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stepBackIfNoWindow() }
         }
 
         NotificationCenter.default.addObserver(
@@ -201,12 +225,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Inbox mode
 
-    private func startWatcher() {
+    /// `since` is the moment from which a file in the folder counts as a
+    /// new capture.
+    private func startWatcher(since: Date = Date()) {
         watcher?.stop()
         safetyWatcher?.stop()
         safetyWatcher = nil
+        folderChecked = Date()
         watcher = ScreenshotWatcher(
-            onNew: { [weak self] url in self?.addCapture(url) },
+            since: since,
+            onNew: { [weak self] url in
+                // A capture that was on the stack and shows up again, saved
+                // to the Desktop from its card for example, is not a new one.
+                guard let self, !self.stack.hasBeenOnStack(url) else { return }
+                self.addCapture(url)
+            },
             onChange: { [weak self] in self?.stack.prune() })
         watcher.start()
         if Inbox.isEnabled, watcher.folder.standardizedFileURL != ScreenshotWatcher.desktop.standardizedFileURL {
@@ -222,6 +255,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 onChange: { [weak self] in self?.stack.prune() })
             safety.start()
             safetyWatcher = safety
+        }
+    }
+
+    /// macOS saves screenshots somewhere else now, because you picked another
+    /// folder in the Options of Cmd+Shift+5, or the watched folder is gone:
+    /// watch the new place. Checked when you switch apps or Spaces, so what
+    /// was captured since the last check still counts as new.
+    private func followScreenshotFolder() {
+        let current = ScreenshotWatcher.screenshotFolder().standardizedFileURL
+        guard current != watcher.folder.standardizedFileURL || watcher.lostFolder else {
+            folderChecked = Date()
+            return
+        }
+        log.notice("The screenshot folder changed, watching it now")
+        startWatcher(since: folderChecked)
+    }
+
+    /// After the app was killed or the Mac lost power in inbox mode, macOS
+    /// went on saving captures to Cornerstack's folder with the thumbnail
+    /// off. They come onto the stack now, the newest ones that fit; the rest
+    /// are in History.
+    private func landMissedCaptures() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let missed = Stack.neverLanded().suffix(Layout.maxItems)
+            DispatchQueue.main.async { [weak self] in
+                if !missed.isEmpty { log.notice("Found \(missed.count) captures taken while Cornerstack was not running") }
+                for url in missed { self?.addCapture(url) }
+            }
         }
     }
 
@@ -385,7 +446,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// A new screenshot lifts off from where it was taken and flies to its
     /// place on the stack. Without a known capture area it simply drops in.
-    private func addCapture(_ url: URL) {
+    private func addCapture(_ url: URL, tries: Int = 4) {
         guard !stack.contains(url) else { return }
         let from = captureRect(of: url)
         // The flight starts out at the captured size, so it needs a sharper
@@ -396,10 +457,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // A big screenshot takes a moment to decode, so that happens off the
         // main thread, once for both the card and its flight.
         decoder.async {
+            let size = fileSize(url)
             let images = loadCapture(url, flightPixels: flightPixels)
             DispatchQueue.main.async { [weak self] in
-                if let images { self?.land(url, images: images, from: from) }
+                guard let images else {
+                    // macOS renames a finished file into place. A tool that
+                    // writes in place may not be done yet: try again shortly.
+                    guard tries > 1, FileManager.default.fileExists(atPath: url.path) else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 * Double(6 - tries)) {
+                        self?.addCapture(url, tries: tries - 1)
+                    }
+                    return
+                }
+                self?.land(url, images: images, from: from)
+                self?.checkAgain(url, size: size)
             }
+        }
+    }
+
+    /// A file that was still being written when its card was made has grown
+    /// since: the card gets the finished image. One look a second later,
+    /// and again while the file keeps growing.
+    private func checkAgain(_ url: URL, size: Int?, tries: Int = 3) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, self.stack.contains(url) else { return }
+            let now = fileSize(url)
+            guard now != size else { return }
+            self.stack.reloadThumbnail(for: url)
+            if tries > 1 { self.checkAgain(url, size: now, tries: tries - 1) }
         }
     }
 
@@ -789,6 +874,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
     }
 
+    /// A menu bar app has no menu bar of its own, but its windows still look
+    /// there for their shortcuts: this is what makes Cmd+W close Settings
+    /// and History, and Cmd+comma, Cmd+Y and Cmd+Q work while one of them is
+    /// in front. It is never shown.
+    private func setUpMainMenu() {
+        let menu = NSMenu()
+        menu.addItem(ClosureMenuItem(L("History…"), key: "y") { [weak self] in
+            guard let self else { return }
+            self.historyWindow.show(self.history)
+        })
+        menu.addItem(ClosureMenuItem(L("Settings…"), key: ",") { [weak self] in
+            self?.openSettings()
+        })
+        menu.addItem(NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+        menu.addItem(ClosureMenuItem(L("Quit Cornerstack"), key: "q") {
+            NSApp.terminate(nil)
+        })
+        let item = NSMenuItem()
+        item.submenu = menu
+        let main = NSMenu()
+        main.addItem(item)
+        NSApp.mainMenu = main
+    }
+
+    /// The last window of Cornerstack's own closed while it was the active
+    /// app: the app you came from is active again.
+    private func stepBackIfNoWindow() {
+        // After the close has gone through.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, NSApp.isActive,
+                  !NSApp.windows.contains(where: { $0.isVisible && $0.styleMask.contains(.titled) }) else { return }
+            self.appBefore?.activate()
+        }
+    }
+
     /// The icon fills in while copied images are added, so it shows at a
     /// glance that the clipboard is being watched.
     private func updateStatusIcon() {
@@ -880,5 +1000,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
         QuickLook.shared.release(panel)
+        stepBackIfNoWindow()
     }
 }

@@ -6,21 +6,26 @@ cd "$(dirname "$0")/.."
 
 CONFIG="${1:-release}"
 APP="build/Cornerstack.app"
-VERSION="1.2.0"
+VERSION="1.2.1"
 
 # Builds one architecture and prints the binary's path.
 # The Command Line Tools for macOS 27 ship an SDK whose SwiftUI needs a macro
 # plugin they do not include. If the default SDK fails, fall back to the
 # newest macOS 26 SDK installed alongside it.
+# The linker leaves out the debug map, which lists this checkout's object
+# files with their paths and dates. With it in, even after stripping, the
+# binary's ID differed from one folder and one build to the next; without it
+# the same source gives the same binary anywhere.
+MAP=(-Xlinker -S)
 build_arch() {
   local triple="$1-apple-macosx14.0"
-  if [ -z "${SDKROOT:-}" ] && ! swift build -c "$CONFIG" --triple "$triple" >&2; then
+  if [ -z "${SDKROOT:-}" ] && ! swift build -c "$CONFIG" --triple "$triple" "${MAP[@]}" >&2; then
     FALLBACK="$(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX26*.sdk 2>/dev/null | sort -V | tail -1)"
     if [ -z "$FALLBACK" ]; then exit 1; fi
     echo "Retrying with $FALLBACK" >&2
     export SDKROOT="$FALLBACK"
   fi
-  if [ -n "${SDKROOT:-}" ]; then swift build -c "$CONFIG" --triple "$triple" >&2; fi
+  if [ -n "${SDKROOT:-}" ]; then swift build -c "$CONFIG" --triple "$triple" "${MAP[@]}" >&2; fi
   cp "$(swift build -c "$CONFIG" --triple "$triple" --show-bin-path)/Cornerstack" "$OUT/Cornerstack-$1"
 }
 
@@ -71,7 +76,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>Cornerstack</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>CFBundleVersion</key><string>5</string>
+  <key>CFBundleVersion</key><string>6</string>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleLocalizations</key><array>${LANGUAGES}</array>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -89,6 +94,18 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# A build meant for others must not carry paths from this Mac: not in the
+# binary, the Info.plist or the resources. Checked before signing, so a build
+# that fails leaves no app behind. grep ends with 1 when it finds nothing;
+# anything else, a match or an error, stops the build.
+FOUND=0
+LC_ALL=C grep -rlaE '/Users/|/var/folders/' "$APP" >&2 || FOUND=$?
+if [ "$FOUND" -ne 1 ]; then
+  echo "The app contains local paths (or could not be checked), not releasing it." >&2
+  rm -rf "$APP"
+  exit 1
+fi
+
 # Sign with a Developer ID when one is in the keychain (or SIGN_IDENTITY is
 # set), with the hardened runtime and a secure timestamp that notarization
 # requires. Without one, sign ad hoc so the app still runs locally.
@@ -101,10 +118,4 @@ else
   echo "Signed ad hoc (no Developer ID found)"
 fi
 codesign --verify --deep --strict "$APP"
-
-# A build meant for others must not carry paths from this Mac.
-if LC_ALL=C grep -aqE '/Users/|/var/folders/' "$APP/Contents/MacOS/Cornerstack"; then
-  echo "The binary contains local paths, not releasing it." >&2
-  exit 1
-fi
 echo "Built $APP"

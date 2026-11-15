@@ -4,6 +4,10 @@ import os
 
 let log = Logger(subsystem: "io.github.nemcaya.cornerstack", category: "stack")
 
+/// Where the time a capture last landed on the stack is kept; see
+/// `Stack.neverLanded`.
+private let landedKey = "lastLanded"
+
 /// One screenshot on the stack.
 struct Shot: Identifiable, Equatable {
     let id = UUID()
@@ -85,12 +89,18 @@ final class Stack: ObservableObject {
 
     private let storeKey = "shots"
     private let keptKey = "keptShots"
+    /// When each capture in Cornerstack's folder left the stack, by path;
+    /// its 30 days count from then. See `sweepInbox`.
+    private let leftKey = "leftAt"
     /// Files of the cards that left most recently, newest last, for "Put back
     /// last card". Only kept while the app runs.
     private var removed: [URL] = []
     /// Names of every file that has been on the stack since launch, so a
     /// screenshot you saved to the Desktop is not picked up there again.
     private var seenNames = Set<String>()
+    /// The captures Hide Secrets is working on, so a second press waits for
+    /// the first instead of writing the same copy at the same time.
+    private var hiding = Set<URL>()
 
     init() {
         restore()
@@ -113,6 +123,7 @@ final class Stack: ObservableObject {
         play("Tink", volume: 0.35)
         read(item)
         History.record(url)
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: landedKey)
         return item.id
     }
 
@@ -121,7 +132,7 @@ final class Stack: ObservableObject {
     private func read(_ item: Shot) {
         guard !item.isRecording else { return }
         let url = item.url
-        Reader.shared.read(url) { [weak self] reading in
+        Reader.shared.read(url, asked: false) { [weak self] reading in
             guard let self, let i = self.items.firstIndex(where: { $0.url == url && !$0.falling }) else { return }
             let code = reading.code
             if self.items[i].code != code { self.items[i].code = code }
@@ -151,6 +162,8 @@ final class Stack: ObservableObject {
     func drop(_ id: UUID, quietly: Bool = false) {
         guard let i = items.firstIndex(where: { $0.id == id }), !items[i].falling else { return }
         remember(items[i].url)
+        left(items[i].url)
+        Reader.shared.skip(items[i].url)
         onFall?(items[i])
         items[i].falling = true
         hitRects[id] = nil
@@ -194,8 +207,14 @@ final class Stack: ObservableObject {
 
     func copy(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
-        Copying.copy(item.url)
-        flash(L("Copied"), on: id)
+        // The file is gone, from a folder nobody watches: nothing to copy,
+        // and the card goes with it.
+        guard FileManager.default.fileExists(atPath: item.url.path) else {
+            NSSound.beep()
+            prune()
+            return
+        }
+        Copying.copy(item.url) { [weak self] in self?.flash(L("Copied"), on: id) }
     }
 
     /// Half the size of a Retina screenshot, as it looked on screen; see
@@ -206,10 +225,12 @@ final class Stack: ObservableObject {
             NSSound.beep()
             return
         }
-        switch Copying.copyAtOneX(item.url) {
-        case .scaled: flash(L("Copied at 1x"), on: id)
-        case .alreadyOneX: flash(L("Copied, already 1x"), on: id)
-        case .failed: NSSound.beep()
+        Copying.copyAtOneX(item.url) { [weak self] result in
+            switch result {
+            case .scaled: self?.flash(L("Copied at 1x"), on: id)
+            case .alreadyOneX: self?.flash(L("Copied, already 1x"), on: id)
+            case .failed: NSSound.beep()
+            }
         }
     }
 
@@ -219,6 +240,7 @@ final class Stack: ObservableObject {
         guard let item = items.first(where: { $0.id == id }), !item.isRecording else { return }
         Reader.shared.read(item.url) { [weak self] reading in
             guard let self else { return }
+            guard !reading.failed else { return self.couldNotRead(id) }
             guard let text = reading.text else {
                 self.flash(L("No text found"), symbol: "text.magnifyingglass", on: id)
                 return
@@ -262,10 +284,17 @@ final class Stack: ObservableObject {
     func hideSecrets(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }), !item.isRecording else { return }
         let url = item.url
+        guard !hiding.contains(url) else { return }
+        hiding.insert(url)
         Reader.shared.read(url) { [weak self] reading in
             guard let self else { return }
+            guard !reading.failed else {
+                self.hiding.remove(url)
+                return self.couldNotRead(id)
+            }
             let boxes = Secrets.find(in: reading)
             guard !boxes.isEmpty else {
+                self.hiding.remove(url)
                 self.flash(L("No secrets found"), symbol: "checkmark.shield", on: id)
                 return
             }
@@ -273,9 +302,12 @@ final class Stack: ObservableObject {
             let base = (url.lastPathComponent as NSString).deletingPathExtension
             let target = self.uniqueURL(in: Inbox.folder, for: base + " " + L("(secrets hidden)") + ".png")
             DispatchQueue.global(qos: .userInitiated).async {
-                let thumb = Secrets.paint(boxes, over: url, to: target) ? makeThumbnail(target) : nil
+                // The card's image comes from the painted copy as it is in
+                // memory, not from reading the new file back.
+                let thumb = Secrets.paint(boxes, over: url, to: target).map(makeThumbnail(from:))
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
+                        self.hiding.remove(url)
                         // In inbox mode the folder watcher may have put the
                         // copy on the stack first; that is fine too.
                         let existing = self.items.first { $0.url == target && !$0.falling }?.id
@@ -391,6 +423,8 @@ final class Stack: ObservableObject {
         do {
             try FileManager.default.moveItem(at: item.url, to: target)
             seenNames.insert(target.lastPathComponent)
+            // History lists it where it is now.
+            History.record(target)
             drop(id, quietly: true)
         } catch {
             log.error("Could not save to Desktop: \(error.localizedDescription, privacy: .public)")
@@ -440,23 +474,74 @@ final class Stack: ObservableObject {
     // MARK: Cornerstack's folder
 
     /// Captures in Cornerstack's own folder stay there after they leave the
-    /// stack, so you can still find them. After `Inbox.keepDays` they move to
-    /// the Trash, or the folder would grow forever. Anything you want to keep
-    /// for good, drag out.
+    /// stack, so you can still find them. `Inbox.keepDays` after they left
+    /// they move to the Trash, or the folder would grow forever. A capture
+    /// that was never on the stack counts from the day it was taken.
+    /// Anything you want to keep for good, drag out.
     func sweepInbox() {
         let fm = FileManager.default
         let cutoff = Date().addingTimeInterval(-Double(Inbox.keepDays) * 24 * 60 * 60)
         let onStack = Set(items.map(\.url.standardizedFileURL))
         let keys: Set<URLResourceKey> = [.creationDateKey, .isRegularFileKey]
-        let files = (try? fm.contentsOfDirectory(
-            at: Inbox.folder, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles])) ?? []
+        let files = (try? fm.contentsOfDirectory(at: Inbox.folder, includingPropertiesForKeys: Array(keys))) ?? []
+        var leftAt = UserDefaults.standard.dictionary(forKey: leftKey) as? [String: Double] ?? [:]
+        // Forget the captures that are gone, so the list stays short.
+        let forgotten = leftAt.keys.filter { !fm.fileExists(atPath: $0) }
+        for path in forgotten { leftAt[path] = nil }
+        if !forgotten.isEmpty { UserDefaults.standard.set(leftAt, forKey: leftKey) }
         var swept = 0
         for file in files where !onStack.contains(file.standardizedFileURL) {
             guard let values = try? file.resourceValues(forKeys: keys), values.isRegularFile == true,
-                  let created = values.creationDate, created < cutoff else { continue }
+                  let created = values.creationDate else { continue }
+            if file.lastPathComponent.hasPrefix(".") {
+                // What Trim or Hide Secrets was writing when the app quit.
+                // Nobody else will find it, so after a day it goes.
+                if isLeftover(file.lastPathComponent), created < Date().addingTimeInterval(-24 * 60 * 60) {
+                    try? fm.removeItem(at: file)
+                }
+                continue
+            }
+            let since = leftAt[file.standardizedFileURL.path].map(Date.init(timeIntervalSince1970:)) ?? created
+            guard since < cutoff else { continue }
             if (try? fm.trashItem(at: file, resultingItemURL: nil)) != nil { swept += 1 }
         }
         if swept > 0 { log.notice("Moved \(swept) old captures to the Trash") }
+    }
+
+    /// The hidden files Cornerstack itself writes before it renames them:
+    /// `Trim`'s ".trimming-…" and `Secrets.paint`'s ".… (secrets hidden).png".
+    private func isLeftover(_ name: String) -> Bool {
+        name.hasPrefix(".trimming-") || (name.hasSuffix(".png") && name.contains(" " + L("(secrets hidden)")))
+    }
+
+    /// Notes when a capture in Cornerstack's folder left the stack.
+    private func left(_ url: URL) {
+        let path = url.standardizedFileURL.path
+        guard path.hasPrefix(Inbox.folder.standardizedFileURL.path + "/") else { return }
+        var leftAt = UserDefaults.standard.dictionary(forKey: leftKey) as? [String: Double] ?? [:]
+        leftAt[path] = Date().timeIntervalSince1970
+        UserDefaults.standard.set(leftAt, forKey: leftKey)
+    }
+
+    /// Captures in Cornerstack's folder that were taken after the last one
+    /// that landed on the stack, oldest first. After the app was killed or
+    /// the Mac lost power, macOS keeps saving there with nobody watching;
+    /// AppDelegate puts these on the stack at the next launch.
+    nonisolated static func neverLanded() -> [URL] {
+        let landed = UserDefaults.standard.double(forKey: landedKey)
+        guard landed > 0 else { return [] }
+        let since = Date(timeIntervalSince1970: landed)
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: Inbox.folder, includingPropertiesForKeys: [.creationDateKey], options: [.skipsHiddenFiles])) ?? []
+        // What History remembers was on the stack, whatever its date says:
+        // Markup writes a file anew, as of today.
+        let landedBefore = History.recorded()
+        return files
+            .filter { History.isCapture($0) && !landedBefore.contains($0.path) }
+            .compactMap { url in (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate).map { (url, $0) } }
+            .filter { $0.1 > since }
+            .sorted { $0.1 < $1.1 }
+            .map(\.0)
     }
 
     // MARK: Persistence
@@ -474,7 +559,13 @@ final class Stack: ObservableObject {
         let kept = Set(UserDefaults.standard.stringArray(forKey: keptKey) ?? [])
         for path in paths where FileManager.default.fileExists(atPath: path) {
             let url = URL(fileURLWithPath: path)
-            guard !items.contains(where: { $0.url == url }), let thumb = makeThumbnail(url) else { continue }
+            guard !items.contains(where: { $0.url == url }) else { continue }
+            guard let thumb = makeThumbnail(url) else {
+                // It can't come back as a card, so it has left the stack
+                // now: its 30 days start here, not on the day it was taken.
+                left(url)
+                continue
+            }
             var item = Shot(url: url, thumb: thumb)
             item.kept = kept.contains(path)
             items.append(item)
@@ -492,6 +583,12 @@ final class Stack: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             if self?.badge == note { self?.badge = nil }
         }
+    }
+
+    /// The image could not be read at all: say so, instead of "nothing found".
+    private func couldNotRead(_ id: UUID) {
+        NSSound.beep()
+        flash(L("Could not read it"), symbol: "exclamationmark.triangle", on: id)
     }
 
     private func play(_ name: String, volume: Float) {

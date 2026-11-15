@@ -22,6 +22,9 @@ final class ScreenshotWatcher {
     private var missed = false
     /// `stop()` arrived while one of the two was still pending.
     private var stopped = false
+    /// The folder itself was deleted or renamed, so nothing is watched any
+    /// more. AppDelegate starts a new watcher when it sees this.
+    private(set) var lostFolder = false
     private let onNew: (URL) -> Void
     private let onChange: () -> Void
 
@@ -30,9 +33,12 @@ final class ScreenshotWatcher {
     static let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
 
     /// Watches the folder macOS saves screenshots to, or a given folder.
-    init(folder: URL? = nil, onNew: @escaping (URL) -> Void, onChange: @escaping () -> Void) {
+    /// `since` is the moment from which a file counts as new: now, or
+    /// earlier for a watcher that takes over after the folder changed.
+    init(folder: URL? = nil, since: Date = Date(), onNew: @escaping (URL) -> Void, onChange: @escaping () -> Void) {
         self.onNew = onNew
         self.onChange = onChange
+        startDate = since
         self.folder = folder ?? Self.screenshotFolder()
         onlyTaggedScreenshots = self.folder.standardizedFileURL.path == Self.desktop.standardizedFileURL.path
         acceptsRecordings = self.folder.standardizedFileURL.path == Inbox.folder.standardizedFileURL.path
@@ -44,8 +50,18 @@ final class ScreenshotWatcher {
         CFPreferencesAppSynchronize("com.apple.screencapture" as CFString)
         // macOS 27 keeps it in "location-screenshot"; earlier versions in "location".
         let domain = "com.apple.screencapture" as CFString
-        let raw = (CFPreferencesCopyAppValue("location-screenshot" as CFString, domain) as? String)
-            ?? (CFPreferencesCopyAppValue("location" as CFString, domain) as? String)
+        let newer = CFPreferencesCopyAppValue("location-screenshot" as CFString, domain) as? String
+        let older = CFPreferencesCopyAppValue("location" as CFString, domain) as? String
+        var raw = newer ?? older
+        // Inbox mode writes Cornerstack's folder into both. A folder picked in
+        // the Options of Cmd+Shift+5 only changes the one this macOS reads, so
+        // when the newer key still says Cornerstack's folder and the older one
+        // says something else, the older one is where screenshots go now.
+        func isInbox(_ path: String) -> Bool {
+            URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.path
+                == Inbox.folder.standardizedFileURL.path
+        }
+        if let newer, let older, !older.isEmpty, isInbox(newer), !isInbox(older) { raw = older }
         if let raw, !raw.isEmpty {
             let url = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath, isDirectory: true)
             var isDir: ObjCBool = false
@@ -57,7 +73,7 @@ final class ScreenshotWatcher {
     /// Anything created after this watcher started counts as new, even if it
     /// landed before the folder could be read (macOS may be asking for
     /// Desktop access at that moment).
-    private let startDate = Date()
+    private let startDate: Date
 
     /// The folder is opened off the main thread, because `open()` blocks while
     /// macOS asks whether Cornerstack may look inside it. On the Desktop that is
@@ -90,7 +106,13 @@ final class ScreenshotWatcher {
         }
         let src = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
-        src.setEventHandler { [weak self] in self?.scheduleScan() }
+        src.setEventHandler { [weak self, weak src] in
+            // Rename and delete are about the folder itself; what happens to
+            // the files in it arrives as a write. Without its folder this
+            // watcher would wait for ever, even when a new one takes its place.
+            if let src, !src.data.isDisjoint(with: [.rename, .delete]) { self?.lostFolder = true }
+            self?.scheduleScan()
+        }
         src.setCancelHandler { close(fd) }
         src.resume()
         source = src

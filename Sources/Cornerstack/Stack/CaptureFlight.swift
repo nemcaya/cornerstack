@@ -132,12 +132,15 @@ final class CaptureFlight {
             return
         }
         // The real card fades in underneath; this one fades out over it.
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.1
-            window.animator().alphaValue = 0
-        }, completionHandler: { [window] in
+        // A plain group, not runAnimationGroup: for that call's closure the
+        // compiler keeps this file's path on the build machine in the app.
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0.1
+        NSAnimationContext.current.completionHandler = { [window] in
             MainActor.assumeIsolated { window.orderOut(nil) }
-        })
+        }
+        window.animator().alphaValue = 0
+        NSAnimationContext.endGrouping()
     }
 
     private func updateFall(_ raw: Double) {

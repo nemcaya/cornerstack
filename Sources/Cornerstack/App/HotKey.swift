@@ -8,11 +8,13 @@ final class HotKey {
     private var ref: EventHotKeyRef?
     private let number: UInt32
     private static var actions: [UInt32: () -> Void] = [:]
+    /// What to do when the key is let go, for the hot keys that care.
+    private static var releases: [UInt32: () -> Void] = [:]
     private static var nextID: UInt32 = 1
     private static var handlerInstalled = false
 
     /// Nil when macOS refuses the shortcut.
-    init?(_ shortcut: Shortcut, action: @escaping () -> Void) {
+    init?(_ shortcut: Shortcut, action: @escaping () -> Void, released: (() -> Void)? = nil) {
         HotKey.installHandler()
         number = HotKey.nextID
         HotKey.nextID += 1
@@ -23,24 +25,32 @@ final class HotKey {
             return nil
         }
         HotKey.actions[number] = action
+        HotKey.releases[number] = released
     }
 
     deinit {
         if let ref { UnregisterEventHotKey(ref) }
         HotKey.actions[number] = nil
+        HotKey.releases[number] = nil
     }
 
     private static func installHandler() {
         guard !handlerInstalled else { return }
         handlerInstalled = true
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        var specs = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
+        ]
         InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
             var id = EventHotKeyID()
             GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
                               nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
             let number = id.id
-            DispatchQueue.main.async { HotKey.actions[number]?() }
+            let released = GetEventKind(event) == UInt32(kEventHotKeyReleased)
+            DispatchQueue.main.async {
+                if released { HotKey.releases[number]?() } else { HotKey.actions[number]?() }
+            }
             return noErr
-        }, 1, &spec, nil, nil)
+        }, specs.count, &specs, nil, nil)
     }
 }
